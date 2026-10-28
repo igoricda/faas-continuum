@@ -1,4 +1,4 @@
-// Hook de observação e replay entry-level (Fase 2, SELETOR-V2 §9).
+// Observation hook and replay at the level of the entries.
 package history
 
 import (
@@ -19,8 +19,8 @@ func observeTestEntry(node string, outcome string, latency int64) Entry {
 	}
 }
 
-// TestSetObserverFiresOnce: UMA chamada por AppendWithGroup com
-// (group, entry) — o fan-out agregado não dispara de novo.
+// TestSetObserverFiresOnce: one call per grouped append, with the group and the
+// entry, and the aggregated fan-out does not fire again.
 func TestSetObserverFiresOnce(t *testing.T) {
 	h, err := NewHistory("", 10)
 	if err != nil {
@@ -50,8 +50,9 @@ func TestSetObserverFiresOnce(t *testing.T) {
 	}
 }
 
-// TestForEachEntryChronological: ordem de chave + cronológica por chave,
-// incluindo a chave agregada (API genérica: o replay do RiskSelector filtra).
+// TestForEachEntryChronological: the order is by key and chronological within a
+// key, including the aggregated key, since the API is generic and the replay of
+// the selector filters.
 func TestForEachEntryChronological(t *testing.T) {
 	h, err := NewHistory("", 10)
 	if err != nil {
@@ -79,9 +80,9 @@ func TestForEachEntryChronological(t *testing.T) {
 		keys = append(keys, key)
 		lats = append(lats, e.ObservedLatencyMS)
 	})
-	// g1 < g2 < agg(g1) < agg(g2)? "\x00L\x00..." ordena antes de "g..."?
-	// Não afirmar ordem entre primárias e agregadas: só que cada chave
-	// aparece com suas entradas em ordem de append.
+	// The ordering between the primary and the aggregated keys is not asserted,
+	// since only the presence of each key with its entries in the order of the
+	// appends matters.
 	byKey := map[string][]int64{}
 	for i, k := range keys {
 		byKey[k] = append(byKey[k], lats[i])
@@ -100,8 +101,9 @@ func TestForEachEntryChronological(t *testing.T) {
 	}
 }
 
-// TestForEachEntrySnapshotIsolation: o callback enxerga a cópia sob RLock;
-// appends concorrentes não corrompem nem mudam o snapshot.
+// TestForEachEntrySnapshotIsolation: the callback sees the copy taken under the
+// read lock, and the concurrent appends neither corrupt it nor change the
+// snapshot.
 func TestForEachEntrySnapshotIsolation(t *testing.T) {
 	h, err := NewHistory("", 100)
 	if err != nil {

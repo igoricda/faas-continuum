@@ -7,11 +7,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// Gate test-audit: protege o opt-in do best-effort (D1) — presença do anúncio
-// liga, ausência/desconhecido/degenerado desliga (caminho síncrono). Regressão
-// crível: tratar nó antigo como cap 0 (armaria pendência com prazo zero) ou
-// ler função errada. Sem cobertura existente (acessor novo). Sem seam novo
-// (função pura, testada direto).
+// Gate test: it protects the opt-in of the best-effort delivery, where the
+// presence of the announcement enables it and its absence, an unknown value or a
+// degenerate one disables it and keeps the synchronous path. The credible
+// regression is to treat an older node as a zero ceiling, which would arm a
+// pending report with a zero deadline, or to read the wrong function.
 func TestNodeFunctionTimeout(t *testing.T) {
 	announced := nodes.Node{NodeID: "n1", FunctionTimeoutMS: map[string]int{"sleep": 15000}}
 	if got, ok := nodeFunctionTimeout(announced, "sleep"); !ok || got != 15*time.Second {

@@ -60,8 +60,8 @@ func TestServer_CategoryTokensLifecycle(t *testing.T) {
 		t.Fatalf("downstream=%q,%v", tok, ok)
 	}
 
-	// Categoria vazia (%20 não casa \x00 mas Issue rejeita " "?) — caminho
-	// inválido: downstream sem node.
+	// An empty category, which does not match the separator, follows the invalid
+	// path, so there is no downstream node.
 	rr = doReq(t, h, http.MethodPut, "/category-tokens/lpr/downstream",
 		`{"node_id":"","concrete":"alpr-ncnn","token":"x"}`, token)
 	if rr.Code != http.StatusBadRequest {

@@ -14,9 +14,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// benchGateway monta um Gateway com um nó httptest que responde 200
-// imediatamente. O log padrão é silenciado: Handle loga duas linhas por
-// invoke (OK + RACE_WINNER) e o output do bench seria só ruído.
+// benchGateway builds a gateway with a test node that answers success
+// immediately. The default log is silenced, since the handler logs two lines per
+// invocation and the output of the benchmark would be only noise.
 func benchGateway(b *testing.B) *Gateway {
 	b.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,9 +41,10 @@ func benchGateway(b *testing.B) *Gateway {
 	})
 }
 
-// BenchmarkGatewayHandle mede o caminho de invocação completo do Árbitro
-// (decode + List + Select + encode + client.Do + Touch) contra um nó local
-// instantâneo: é o teto do hot path do gateway sem rede real.
+// BenchmarkGatewayHandle measures the complete invocation path of the arbiter,
+// with the decoding, the listing, the selection, the encoding, the call to the
+// node and the liveness update, against an instant local node, which is the
+// ceiling of the hot path without a real network.
 func BenchmarkGatewayHandle(b *testing.B) {
 	gw := benchGateway(b)
 	prev := log.Writer()
@@ -65,21 +66,22 @@ func BenchmarkGatewayHandle(b *testing.B) {
 	}
 }
 
-// BenchmarkGatewayHandleDecodeOnly mede o custo de decode+validação do
-// pedido, sem resposta de nó: isola o custo do parse (frontend do Handle)
-// do custo de rede. O nó "ghost" fica stale e falha o dial imediatamente,
-// esgotando a fila de 1 elemento com 502 sem tocar em rede real.
+// BenchmarkGatewayHandleDecodeOnly measures the cost of the decoding and of the
+// validation of the request, without an answer of a node, which isolates the
+// cost of the parsing from the cost of the network. The ghost node stays stale
+// and fails the dial immediately, which empties the single-element queue with a
+// bad gateway and without touching a real network.
 func BenchmarkGatewayHandleDecodeOnly(b *testing.B) {
 	gw := benchGateway(b)
-	// Remove o nó: Select retorna fila vazia => 503 imediatamente após
-	// decode/validação/late-group, sem client.Do.
+	// The node is removed, so the selection returns an empty queue and the answer
+	// is written immediately after the decoding and the validation.
 	if _, err := gw.nodes.Upsert(nodes.Node{NodeID: "ghost", Layer: nodes.LayerBorda, Host: "127.0.0.1:1"}); err != nil {
 		b.Fatalf("Upsert ghost: %v", err)
 	}
 	if err := gw.nodes.Delete("bench-node"); err != nil {
 		b.Fatalf("Delete bench-node: %v", err)
 	}
-	// Nó "ghost" fica stale: DerivedStatus != ativo => fila vazia.
+	// The ghost node stays stale, so its derived status is not active and the queue is empty.
 	time.Sleep(10 * time.Millisecond)
 
 	prev := log.Writer()

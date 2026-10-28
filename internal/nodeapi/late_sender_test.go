@@ -54,7 +54,7 @@ func TestLateSend(t *testing.T) {
 	ts, srv, mgmtToken := newLateTestServer(t, newFakeInstanceBackend(t, slowHandler))
 	defer ts.Close()
 	srv.configureLateSender(arb.URL, "node-token", "node1", lateQueueCap, 0)
-	defer close(srv.lateQueue) // mata o lateSenderLoop; sem isso vaza e corre contra buffers de log de outros testes
+	defer close(srv.lateQueue) // It stops the sender loop, which would otherwise leak and race with the log buffers of the other tests
 
 	resp := doRegister(t, ts, mgmtToken, "func-late", registerRequest{ImageRef: "img:1.0", MinInstances: 1, TimeoutMS: 3000, LateReportable: true})
 	_, invTok := mustRegister(t, resp)
@@ -105,7 +105,7 @@ func TestLateReportColdStart(t *testing.T) {
 	ts, srv, mgmtToken := newLateTestServer(t, newFakeInstanceBackend(t, echoHandler))
 	defer ts.Close()
 	srv.configureLateSender(arb.URL, "node-token", "node1", lateQueueCap, 0)
-	defer close(srv.lateQueue) // mata o lateSenderLoop; sem isso vaza e corre contra buffers de log de outros testes
+	defer close(srv.lateQueue) // It stops the sender loop, which would otherwise leak and race with the log buffers of the other tests
 
 	// With no minimum instance, the first invocation provisions the
 	// instance and the second one reuses the released one.
@@ -231,7 +231,7 @@ func TestLateSendQueueFull(t *testing.T) {
 	ts, srv, mgmtToken := newLateTestServer(t, newFakeInstanceBackend(t, echoHandler))
 	defer ts.Close()
 	srv.configureLateSender("http://127.0.0.1:1", "node-token", "node1", lateQueueCap, 0)
-	defer close(srv.lateQueue) // mata o lateSenderLoop; sem isso vaza e corre contra buffers de log de outros testes
+	defer close(srv.lateQueue) // It stops the sender loop, which would otherwise leak and race with the log buffers of the other tests
 
 	resp := doRegister(t, ts, mgmtToken, "func-late", registerRequest{ImageRef: "img:1.0", MinInstances: 1, LateReportable: true})
 	_, invTok := mustRegister(t, resp)

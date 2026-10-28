@@ -207,8 +207,8 @@ func TestE2E_Selection(t *testing.T) {
 		"borda-2": {CPUUsagePct: 90, MemoryUsagePct: 10}, // overloaded (CPU >85)
 	}
 
-	// Sem teto de camada (2026-09-28): o SLO não filtra; só a sobrecarga de
-	// borda-2 (CPU 90 > 85) sai => [borda-1 nevoa-1].
+	// Without a ceiling per layer the objective does not filter, and only the
+	// overload of the second edge leaves the queue.
 	slo := &selection.SLO{MaxLatencyMS: 500}
 	ranked := selection.RankNodes(candidates, latest, slo, cfg)
 	if len(ranked) != 2 || ranked[0].NodeID != "borda-1" || ranked[1].NodeID != "nevoa-1" {

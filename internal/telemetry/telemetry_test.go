@@ -64,7 +64,7 @@ func (f fixture) writeCgroupCounters(usageUSec uint64) {
 	files := map[string]string{
 		filepath.Join(f.cgroup, "cpu.stat"):       "usage_usec " + strconv.FormatUint(usageUSec, 10) + "\nnr_periods 0\n",
 		filepath.Join(f.cgroup, "memory.current"): "1073741824\n", // 1 GiB
-		filepath.Join(f.cgroup, "memory.max"):     "2147483648\n", // 2 GiB => memória fixa em 50%
+		filepath.Join(f.cgroup, "memory.max"):     "2147483648\n", // two gibibytes means a fixed memory of fifty percent
 	}
 	for name, content := range files {
 		if err := os.WriteFile(name, []byte(content), 0o644); err != nil {
@@ -229,7 +229,7 @@ func TestFirstCollectPrimesCPUSample(t *testing.T) {
 func TestCollectorDetectsMechanism(t *testing.T) {
 	f := newFixture(t)
 
-	procfsCol := newTestCollector(t, f) // f.cgroup está vazio
+	procfsCol := newTestCollector(t, f) // the cgroup of the function is empty
 	if got := procfsCol.UsageSource(); got != "procfs" {
 		t.Errorf("UsageSource() = %q para raiz vazia, esperado %q", got, "procfs")
 	}

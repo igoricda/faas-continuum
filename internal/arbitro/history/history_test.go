@@ -61,15 +61,15 @@ func TestSegmentKey(t *testing.T) {
 		if k1 == k2 {
 			t.Fatalf("colisao: k1=%q k2=%q deveriam ser diferentes", k1, k2)
 		}
-		// Verifica que a colisão sem separador existiria.
+		// It verifies that the collision would exist without the separator.
 		if "ab"+"c" == "a"+"bc" {
-			// ok: sem separador colidiriam; com separador não colidem — prova do design.
+			// The separator prevents the collision, which is the proof of the design.
 		}
 		// Teste direto do enunciado: "a\x00b" != "ab"
 		if "a\x00b" == "ab" {
 			t.Fatalf("separador nulo não deveria colidir com string vazia")
 		}
-		// Segundo nivel: bucket com separador (chave 3D: grupo+nó+bucket).
+		// The second level is the bucket with a separator, so the key holds the group, the node and the bucket.
 		sc2 := ScenarioContext{LoadBucket: "50-75%"}
 		k3 := SegmentKey("fn", "n1", sc2)
 		parts := strings.Split(k3, "\x00")
@@ -108,7 +108,7 @@ func TestEntryMarshal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	// Verifica snake_case conforme schemas §7.
+	// It verifies the naming in snake case, as in the schemas.
 	for _, want := range []string{`"function_name"`, `"node_id"`, `"timestamp"`, `"scenario_context"`, `"load_bucket"`, `"observed_latency_ms"`, `"slo_met"`, `"outcome"`, `"cold_start"`, `"instance_id"`} {
 		if !strings.Contains(string(data), want) {
 			t.Fatalf("json não contém %s: %s", want, string(data))

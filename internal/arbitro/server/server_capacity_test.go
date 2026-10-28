@@ -72,7 +72,7 @@ func TestRegisterCapacityNegative400(t *testing.T) {
 	srv, token, ns, _ := newTestServerEnv(t)
 	h := srv.Handler()
 
-	// Estado prévio válido.
+	// A valid previous state.
 	rr := doReq(t, h, "POST", "/nodes", map[string]any{
 		"node_id": "cap-neg", "layer": "borda", "host": "10.0.0.1:8080",
 		"functions":     []string{"sleep"},

@@ -19,7 +19,7 @@ import (
 	"github.com/igoricda/faas-continuum/internal/auth"
 )
 
-const maxManagementBodyBytes = 64 * 1024 // 64 KiB — teto para /nodes* (PROJECT §3:2)
+const maxManagementBodyBytes = 64 * 1024 // ceiling of the management bodies, which include the node routes
 const contentTypeHeader = "Content-Type"
 const applicationJSON = "application/json"
 

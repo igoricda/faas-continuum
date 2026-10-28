@@ -1,12 +1,12 @@
 package gateway
 
-// Amarração 503→monitor/history (capacity-history-arbitro, todo 7 +
-// ADR-0007, AUD-21): TestGateway503Capacity prova status/history mas nunca
-// lê o monitor; aqui cada 503 válido marca esgotado (avail=0, ok=true) e o
-// genérico (code desconhecido/corpo inválido) vai só ao invLog, sem History
-// e sem tocar o monitor — semântica do status, não do corpo. Mais as
-// combinações nil de hist/invLog no recordAttempt (ingestão antes do early
-// return).
+// Binding of the rejection to the monitor and to the history: the other test
+// proves the status and the history but never reads the monitor, while here each
+// valid rejection marks the variant as exhausted and the generic one, with an
+// unknown code or an invalid body, goes only to the log, without the history and
+// without touching the monitor, which is the semantics of the status and not of
+// the body. It also covers the combinations with a nil history or a nil log, in
+// which the ingestion happens before the early return.
 
 import (
 	"net/http"
@@ -69,12 +69,11 @@ func TestGatewayExhaustedMarksMonitor(t *testing.T) {
 					t.Fatalf("monitor após %s = (%+v,true), esperado false (genérico não marca)", tc.name, got)
 				}
 			}
-			// O 503 treina o History como SATURAÇÃO sem latência
-			// (primária + agregada), inclusive o genérico: p95/Count
-			// seguem só com sucesso, e a recusa fica fora de
-			// Total/SuccessRate — é o nó recusando o que não dá conta, não
-			// falta de confiabilidade (plano-sinal-saturacao-selflearning
-			// D1).
+			// The rejection trains the history as a saturation without latency, in
+			// the primary and in the aggregated keys, including the generic one, so
+			// the percentile and the count keep only the successes and the refusal
+			// stays out of the total and of the success rate. It is the node
+			// refusing what it cannot handle, and not a lack of reliability.
 			if tc.wantHistory {
 				if len(h.Keys()) != 2 {
 					t.Fatalf("history tem %d chaves após %s, esperado 2 (primária + agregada)", len(h.Keys()), tc.name)
@@ -100,7 +99,7 @@ func TestRecordAttemptCapacityNilCombinations(t *testing.T) {
 	slo := &selection.SLO{MaxLatencyMS: 500}
 	group := selection.ResolveRequestGroup("fn-cap", []nodes.Node{node})
 
-	// hist==nil + invLog presente: rejeição cai no log, sem pânico.
+	// With a nil history and a log present, the rejection goes to the log and never panics.
 	logPath := t.TempDir() + "/invocations.jsonl"
 	l, err := NewInvocationLog(logPath)
 	if err != nil {
@@ -118,9 +117,9 @@ func TestRecordAttemptCapacityNilCombinations(t *testing.T) {
 		t.Fatal("monitor após rejeição só-log = false, esperado true (ingestão antes do early return)")
 	}
 
-	// hist presente + invLog==nil: rejeição treina como saturação sem
-	// latência (D1), sem log e sem pânico; sem Layer não há chave agregada
-	// (só a primária).
+	// With a history present and a nil log, the rejection trains as a saturation
+	// without latency, without a log and without a panic, and without a layer
+	// there is no aggregated key, only the primary one.
 	h, err := history.NewHistory("", 100)
 	if err != nil {
 		t.Fatalf("NewHistory: %v", err)
@@ -139,7 +138,7 @@ func TestRecordAttemptCapacityNilCombinations(t *testing.T) {
 		t.Fatal("monitor após rejeição sem-log = false, esperado true")
 	}
 
-	// hist==nil + invLog==nil: early return, mas a ingestão já marcou.
+	// With both nil, the recording returns early, but the ingestion already marked the variant.
 	monBare := monitor.NewMonitor()
 	gwBare := NewGatewayWithHistory(GatewayConfig{Monitor: monBare, Clock: fixedClock(now)})
 	func() {

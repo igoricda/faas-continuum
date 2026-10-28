@@ -1,16 +1,16 @@
 package selection
 
-// D39 (adendo 2026-09-25 do ADR-0007): o gating de capacidade percorre TODAS
-// as variantes da categoria por nó. Cenário do diagnóstico: a névoa hospeda
-// [alpr-cpu, alpr-gpu] na categoria lpr; com a chave única (alfabeticamente
-// primeira = alpr-cpu) um alpr-cpu sem instância viva derrubava o nó inteiro
-// e o HL ia direto para a nuvem sem tentar a alpr-gpu viva.
+// The capacity gating walks every variant of the category per node. The
+// scenario of the diagnosis was a fog that hosts two concrete variants of the
+// same category, where the single key, which is alphabetically the first, had no
+// live instance and dropped the whole node, so the hard-limit baseline went to
+// the cloud without trying the live variant.
 //
-// Cobertura: (a) o nó fica enquanto houver variante viva; (b) sai quando
-// todas esgotam; (c) a variante esgotada é preterida no despacho
-// (AvailableConcrete), preservando a paridade treino/consulta da chave;
-// (d) desconhecido/TTL e fail-open intactos; (e) ciclo de vida: leitura
-// fresca (piggyback/periódica) limpa a marca e a variante volta.
+// Coverage: the node stays while any variant is alive; it leaves when every
+// variant is exhausted; an exhausted variant is demoted at the dispatch, which
+// preserves the parity between the training key and the query key; the unknown
+// value and the time to live keep the fail-open; and the lifecycle regenerates
+// the variant through a fresh reading.
 
 import (
 	"slices"
@@ -23,8 +23,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// nevoaNode é a névoa do diagnóstico: DUAS variantes concretas da categoria
-// lpr. A chave legada (ResolveConcrete/capacityNameForNode) é alpr-cpu.
+// nevoaNode is the fog of the diagnosis, with two concrete variants of the same
+// category. The legacy key is the first variant in alphabetical order.
 func nevoaNode() nodes.Node {
 	return nodes.Node{
 		NodeID:             "nevoa",
@@ -34,9 +34,9 @@ func nevoaNode() nodes.Node {
 	}
 }
 
-// nevoaFixture acrescenta a borda (hospeda lpr concreto) para que a lista
-// não fique vazia quando a névoa é preterida — sem ela o fail-open
-// devolveria a própria névoa e mascararia o teste.
+// nevoaFixture adds the edge, which hosts the concrete category, so the list
+// does not become empty when the fog is demoted, since without it the fail-open
+// would return the fog itself and mask the test.
 func nevoaFixture() []nodes.Node {
 	return []nodes.Node{
 		nevoaNode(),
@@ -111,9 +111,9 @@ func TestCapacityVariantsForNode(t *testing.T) {
 	}
 }
 
-// Paridade treino/consulta: as variantes são exatamente os nomes CONCRETOS
-// hospedados (nunca a categoria, nunca inventados) — a mesma chave que o
-// produtor (nodeapi) reporta e que MarkExhausted usa.
+// Parity between training and query: the variants are exactly the hosted
+// concrete names, never the category and never an invented name, which is the
+// same key that the producer reports and that the exhaustion mark uses.
 func TestCapacityVariantsAreHostedConcreteNames(t *testing.T) {
 	node := nevoaNode()
 	for _, v := range capacityVariantsForNode(node, "lpr") {
@@ -132,8 +132,8 @@ func TestFilterExhaustedVariantsKeepsNodeWithLiveVariant(t *testing.T) {
 	capNames := capacityNamesByNode(cands, "lpr", nil, false)
 	capVars := capacityVariantsByNode(cands, "lpr")
 
-	// Premissa do teste: a chave legada da névoa é alpr-cpu (marcada) —
-	// sem o D39 o estágio de chave única derrubaria o nó.
+	// Premise of the test: the legacy key of the fog is the marked variant, and
+	// without the walk over the variants the single key would drop the node.
 	if legacy := capacityNameForNode(cands[0], "lpr", nil, false); legacy != "alpr-cpu" {
 		t.Fatalf("premissa: chave legada=%q want=alpr-cpu", legacy)
 	}
@@ -168,8 +168,9 @@ func TestFilterExhaustedVariantsDropsWhenAllExhausted(t *testing.T) {
 	}
 }
 
-// Desconhecido nunca gating: chave legada esgotada mas OUTRA variante sem
-// leitura fresca (TTL/asente) => mantém (fail-open), como no estágio antigo.
+// An unknown reading never gates: an exhausted legacy key with another variant
+// that has no fresh reading, because of the time to live or of an absent report,
+// keeps the node, which is the fail-open of the previous stage.
 func TestFilterExhaustedVariantsUnknownKeepsNode(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	cands := nevoaFixture()
@@ -185,8 +186,9 @@ func TestFilterExhaustedVariantsUnknownKeepsNode(t *testing.T) {
 	}
 }
 
-// Regressão do silêncio HL: com uma variante viva a névoa fica na fila do
-// hard-limits (antes saía e o dispatch ia à nuvem sem tentar a alpr-gpu).
+// Regression of the silence in the hard-limit baseline: with a live variant the
+// fog stays in the queue, while before it left and the dispatch went to the
+// cloud without trying the live variant.
 func TestSelectHLKeepsNevoaWithLiveVariant(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()
@@ -200,7 +202,7 @@ func TestSelectHLKeepsNevoaWithLiveVariant(t *testing.T) {
 		t.Fatalf("HL/D39: névoa com alpr-gpu viva deveria ficar, got=%v", got)
 	}
 
-	// Todas as variantes com marca fresca: aí sim sai (a borda segura a lista).
+	// With every variant carrying a fresh mark the node leaves, since the edge keeps the list non-empty.
 	mon.MarkExhausted("nevoa", "alpr-gpu", now)
 	got = exhaustedIDs(q.Select(cands, "lpr", nil))
 	if slices.Contains(got, "nevoa") {
@@ -208,9 +210,9 @@ func TestSelectHLKeepsNevoaWithLiveVariant(t *testing.T) {
 	}
 }
 
-// RiskSelector (canônico): só derruba com TODAS as variantes com marca
-// otimista fresca; uma variante não marcada (mesmo genuine-cold) mantém o
-// nó. O estágio de capacidade é compartilhado e roda ANTES da previsão.
+// In the canonical risk selector the node only leaves when every variant carries
+// a fresh optimistic mark, and a variant without a mark keeps it even when it is
+// genuinely cold. The capacity stage is shared and runs before the prediction.
 func TestSelectRiskKeepsUnmarkedVariant(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()
@@ -251,8 +253,7 @@ func TestAvailableConcretePrefersLiveVariant(t *testing.T) {
 	if got, ok := AvailableConcrete(mon, node, "lpr", now); ok {
 		t.Fatalf("sem leitura = %q,%v want ok=false", got, ok)
 	}
-	// Wildcard não tem chave concreta => ok=false (o chamador mantém o
-	// verbatim do ResolveConcrete).
+	// A wildcard has no concrete key, so the resolution reports false and the caller keeps the verbatim resolution.
 	if got, ok := AvailableConcrete(mon, nodes.Node{NodeID: "w"}, "lpr", now); ok {
 		t.Fatalf("wildcard = %q,%v want ok=false", got, ok)
 	}
@@ -265,8 +266,7 @@ func TestAvailableConcretePrefersLiveVariant(t *testing.T) {
 		t.Fatalf("preferência = %q,%v want alpr-gpu,true", got, ok)
 	}
 
-	// Ambas vivas => primeira em ordem determinística (alpr-cpu), igual à
-	// resolução legada.
+	// With both variants alive the first in deterministic order is chosen, as in the legacy resolution.
 	mon.UpdateCapacity("nevoa", "alpr-cpu", lprCap(2), now)
 	got, ok = AvailableConcrete(mon, node, "lpr", now)
 	if !ok || got != "alpr-cpu" {
@@ -281,9 +281,9 @@ func TestAvailableConcretePrefersLiveVariant(t *testing.T) {
 	}
 }
 
-// Ciclo de vida (regeneração pelas respostas): leitura FRESCA de capacidade
-// (piggyback/periódica) limpa a marca e a variante volta a ser preferida —
-// sem esperar o TTL.
+// Lifecycle through the answers: a fresh capacity reading, either piggybacked or
+// periodic, clears the mark and the variant becomes preferred again, without
+// waiting for the time to live.
 func TestExhaustedVariantRegeneratesFromFreshCapacity(t *testing.T) {
 	now := time.Date(2026, 9, 25, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()

@@ -67,7 +67,7 @@ func (r *Registry) Update(host, name, imageRef string, opts RegisterOptions, rot
 			updated.invokeTokenSum, updated.invokeTokenSumValid = prev.invokeTokenSum, prev.invokeTokenSumValid
 		}
 		functions[name] = updated
-		return func() { functions[name] = prev }, nil // rollback em memória
+		return func() { functions[name] = prev }, nil // rollback in memory
 	})
 	if err != nil {
 		if errors.Is(err, ErrFunctionNotFound) {
@@ -145,7 +145,7 @@ func (r *Registry) Unregister(name string) error {
 			return nil, fmt.Errorf("%w: %q", ErrFunctionNotFound, name)
 		}
 		delete(functions, name)
-		return func() { functions[name] = prev }, nil // rollback em memória
+		return func() { functions[name] = prev }, nil // rollback in memory
 	})
 	if err != nil {
 		if errors.Is(err, ErrFunctionNotFound) {

@@ -1,4 +1,4 @@
-// Portas do gateway, validação de config e priors (SELETOR-V2 §9, §10).
+// Ports of the gateway, validation of the configuration and priors.
 package selection
 
 import (
@@ -11,8 +11,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// TestRiskPorts: S_up sem espera (G2); probation => fail-open; queuecap
-// delega à lógica compartilhada maxQueueKForNode (queuecap.go).
+// TestRiskPorts covers the upper bound of the service time without the wait, the
+// fail-open in the probation and the delegation of the queue ceiling to the
+// shared logic.
 func TestRiskPorts(t *testing.T) {
 	learner := learn.NewLearner(DefaultRiskConfig().LearnConfig())
 	// Modelo aquecido: 5 sucessos de 800ms.
@@ -33,8 +34,9 @@ func TestRiskPorts(t *testing.T) {
 	if !ok || ms2 != ms {
 		t.Fatalf("NewRequest = (%d, %v), want igual a %d", ms2, ok, ms)
 	}
-	// S_up exclui a espera: com k alto, a porta não cresce com a fila
-	// (a fila vive só no ranking do seletor, G2).
+	// The upper bound excludes the wait, so with a high number of requests in
+	// flight the port does not grow with the queue, which lives only in the ranking
+	// of the selector.
 	busy := &RiskSelector{
 		Clock:      func() time.Time { return fixtureTime },
 		InflightOf: func(string) int { return 7 },
@@ -49,7 +51,7 @@ func TestRiskPorts(t *testing.T) {
 	if !(float64(msBusy) < full.UpperMS) {
 		t.Fatalf("porta=%d, B com fila=%v: a porta deve excluir W", msBusy, full.UpperMS)
 	}
-	// Probation => fail-open (gateway usa a fatia sem previsão).
+	// In the probation the port is fail-open, and the gateway uses the slice without a prediction.
 	fresh := &RiskSelector{Clock: func() time.Time { return fixtureTime }, Learner: learn.NewLearner(DefaultRiskConfig().LearnConfig()), Cfg: DefaultRiskConfig()}
 	if _, ok := fresh.PredictLatencyMS("fn", n, nil); ok {
 		t.Fatalf("probation: ok=true want false")
@@ -58,13 +60,13 @@ func TestRiskPorts(t *testing.T) {
 	if _, ok := (&RiskSelector{}).PredictLatencyMS("fn", n, nil); ok {
 		t.Fatalf("sem learner: ok=true want false")
 	}
-	// QueueCap sem histórico => fail-open (teto aprendido, queuecap.go).
+	// The queue ceiling without a history is fail-open, since it comes from the learned ceiling.
 	if _, ok := sel.PredictMaxQueueK("fn", n, nil); ok {
 		t.Fatalf("queuecap sem hist: ok=true want false")
 	}
 }
 
-// TestRiskConfigValidate cobre os domínios da §10.
+// TestRiskConfigValidate covers the valid domains of the configuration.
 func TestRiskConfigValidate(t *testing.T) {
 	if err := DefaultRiskConfig().Validate(); err != nil {
 		t.Fatalf("defaults: %v", err)
@@ -95,7 +97,7 @@ func TestRiskConfigValidate(t *testing.T) {
 	}
 }
 
-// TestLoadRiskPriors: exato, fallback por camada, vazio e inválido.
+// TestLoadRiskPriors covers the exact value, the fallback per layer, the empty input and the invalid input.
 func TestLoadRiskPriors(t *testing.T) {
 	if p, err := LoadRiskPriors(""); err != nil || len(p) != 0 {
 		t.Fatalf("vazio: p=%v err=%v", p, err)

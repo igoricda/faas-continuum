@@ -44,21 +44,21 @@ type Cenario struct {
 	// adaptive runner, or a burst, with a number of workers in a loop as the
 	// probes of six and ten workers of the session.
 	Tipo           string        `json:"tipo"`
-	SLO            int           `json:"slo_ms"` // 0 = sem SLO
+	SLO            int           `json:"slo_ms"` // zero means no objective
 	Intervals      []float64     `json:"intervals_s"`
 	Warmup         int           `json:"warmup"`
 	Reps           int           `json:"reps"`
 	Imagens        int           `json:"imagens"`
 	Workers        int           `json:"workers"`
 	Duracao        time.Duration `json:"duracao_s"`
-	DerrubarLocais bool          `json:"derruba_locais"` // borda+névoa respondem 503 (valida nuvem)
+	DerrubarLocais bool          `json:"derruba_locais"` // the edge and the fog answer 503, which exercises the cloud
 }
 
 // Config is the configuration of the bench, shared by the scenarios.
 type Config struct {
 	InvLogPath  string
 	OutDir      string
-	HistorySeed string // "none" = histórico vazio; caminho = seed real copiado
+	HistorySeed string // "none" means an empty history, and a path is a real seed copied over
 	Severidade  float64
 	Seed        int64
 	MaxCPU      float64
@@ -70,9 +70,9 @@ type Config struct {
 	// sample. The warm mode primes the pools.
 	Frio bool
 	// The priming is the duration of a burst under the objective of the scenario
-	// before the measured phase, which warms the history as the mixed priming of
+	// before the measured stage, which warms the history as the mixed priming of
 	// the batch. The metrics of the client and the counters of the choices of the
-	// measured phase are taken by difference, so they do not carry the priming.
+	// measured stage are taken by difference, so they do not carry the priming.
 	Prime time.Duration
 	// The override replaces the hyperparameters of the risk selector in the risk
 	// mode, for the fine-tuning and the ablations, and a nil value means the
@@ -114,7 +114,7 @@ type Resultado struct {
 	PrimeiroPorNo     map[string]int `json:"primeira_escolha_por_no"`
 
 	// The choices of the risk selector are the difference of its counters in the
-	// measured phase, which is zero in the hard-limit baseline.
+	// measured stage, which is zero in the hard-limit baseline.
 	EscolhasRisk selection.RiskStatsSnapshot `json:"escolhas_risk,omitempty"`
 
 	Alertas []string `json:"alertas"`
@@ -301,7 +301,7 @@ func Run(cfg Config, cen Cenario, cal *Calibracao) (*Resultado, error) {
 
 	// The priming only exists in the risk mode: a burst under the objective of the
 	// scenario warms the learner as the mixed priming of the batch, with its own
-	// discarded client, and the counters of the choices of the measured phase are
+	// discarded client, and the counters of the choices of the measured stage are
 	// taken by difference.
 	if cfg.Prime > 0 && cen.Modo != ModoHardLimits && !cen.DerrubarLocais {
 		primeWorkers := cen.Workers
@@ -320,7 +320,7 @@ func Run(cfg Config, cen Cenario, cal *Calibracao) (*Resultado, error) {
 	switch cen.Tipo {
 	case "burst":
 		cli.burst(cen.Workers, cen.Duracao)
-	default: // cadência (runner)
+	default: // cadence, as in the runner
 		cli.cadence(cen.Intervals, cen.Warmup, cen.Reps, cen.Imagens)
 	}
 	res.Duracao = time.Since(inicio)
@@ -452,7 +452,7 @@ func parseTentativas(path string, res *Resultado) {
 	}
 }
 
-// subRiskSnapshot returns the difference counter by counter, of the measured phase minus the priming.
+// subRiskSnapshot returns the difference counter by counter, of the measured stage minus the priming.
 func subRiskSnapshot(after, before selection.RiskStatsSnapshot) selection.RiskStatsSnapshot {
 	return selection.RiskStatsSnapshot{
 		Feasible:          after.Feasible - before.Feasible,

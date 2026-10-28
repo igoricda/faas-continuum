@@ -1,9 +1,9 @@
 package gateway
 
-// Teste de chaveamento por grupo no record path (function-category-routing,
-// todo 6): recordAttempt registra estatísticas sob o grupo resolvido
-// (curva compartilhada entre variantes) enquanto Entry preserva o pedido;
-// recordCloudAttempt nunca toca o History (exclusão mantida).
+// Test of the keying by group in the recording path: the recording of an attempt
+// stores the statistics under the resolved group, which shares the curve between
+// the variants, while the entry preserves the request. The recording of a cloud
+// attempt never touches the history, which keeps the exclusion.
 
 import (
 	"testing"
@@ -25,7 +25,7 @@ func TestRecordAttemptGroupKeying(t *testing.T) {
 
 	node := nodes.Node{NodeID: "borda-1"}
 	slo := &selection.SLO{MaxLatencyMS: 500}
-	// Duas variantes, mesmo grupo resolvido (pedido tiny => grupo alpr-yolo).
+	// Two variants share the resolved group, since the request of the tiny variant maps to the category.
 	gw.recordAttempt(node, 5*time.Millisecond, nil, slo, "alpr-yolo-tiny", "alpr-yolo", nil, true, "", 0, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 	gw.recordAttempt(node, 7*time.Millisecond, nil, slo, "alpr-yolo-full", "alpr-yolo", nil, true, "", 0, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 
@@ -35,7 +35,7 @@ func TestRecordAttemptGroupKeying(t *testing.T) {
 	if !ok || count != 2 {
 		t.Fatalf("Stats(%q) = (%d,%v), esperado (2,true): variantes partilham a chave de grupo", groupKey, count, ok)
 	}
-	// Entry preserva o pedido em cada linha.
+	// The entry preserves the request in each line.
 	keys := h.KeysForNode("borda-1")
 	if len(keys) != 1 {
 		t.Fatalf("KeysForNode = %d chaves, esperado 1", len(keys))

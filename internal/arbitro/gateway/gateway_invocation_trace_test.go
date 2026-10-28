@@ -1,8 +1,8 @@
 package gateway
 
-// Fase 0b (SELETOR-V2 §12): o invocation log agrupa tentativas por invoke.
-// Um invoke com corrida gera linhas com o mesmo request_id, attempt_n 1..n
-// e exatamente uma com delivered=true.
+// The invocation log groups the attempts by invocation: an invocation with a race
+// produces lines with the same request identifier, attempt numbers from one to
+// the number of attempts and exactly one line marked as delivered.
 import (
 	"net/http"
 	"net/http/httptest"

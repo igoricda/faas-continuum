@@ -1,9 +1,9 @@
 package gateway
 
-// Bordas do parse 503 de capacidade (capacity-history-arbitro, todo 7):
-// cobre o que TestClassifyCapacity/TestGateway503Capacity não tocam —
-// fronteira exata de 64KiB, JSON válido não-objeto, truncamento, case e
-// identidade via wrap + propagação dos campos do CapacityError.
+// Edges of the parse of the capacity rejection: it covers what the other tests
+// do not touch, which is the exact boundary of the body ceiling, a valid JSON
+// that is not an object, a truncation, the case of the code and the identity
+// through a wrapped error with the propagation of the fields.
 
 import (
 	"errors"
@@ -46,7 +46,7 @@ func TestCapacityParseBoundaryExact(t *testing.T) {
 }
 
 func TestCapacityParseNonObjectShapes(t *testing.T) {
-	// JSON válido mas sem {"code"} extraível => caminho genérico (nil).
+	// A valid JSON without an extractable code follows the generic path, which gives no capacity error.
 	for name, body := range map[string][]byte{
 		"null":            []byte(`null`),
 		"array":           []byte(`["POOL_EXHAUSTED"]`),
@@ -72,7 +72,7 @@ func TestCapacityRejectionWrappedIdentity(t *testing.T) {
 	if capErr == nil {
 		t.Fatal("QUEUE_FULL válido = nil, esperado capacity error")
 	}
-	// errors.As atravessa wrap e os campos se propagam (mesmo pacote).
+	// The error unwrapping crosses the wrap and the fields propagate.
 	wrapped := fmt.Errorf("tentativa 2/3 no nó n9: %w", capErr)
 	if !IsCapacityRejection(wrapped) {
 		t.Fatalf("wrapped: IsCapacityRejection = false: %v", wrapped)

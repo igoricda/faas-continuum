@@ -89,7 +89,7 @@ func decodeInvocationSample(data *anypb.Any) (telemetry.InvocationSample, error)
 		}
 		var sample telemetry.InvocationSample
 		if m.CPU != nil {
-			sample.CPUUsageUSec = m.CPU.UsageUsec // cpu.usage_usec já é µs
+			sample.CPUUsageUSec = m.CPU.UsageUsec // the accounting is already in microseconds
 		}
 		if m.Memory != nil {
 			sample.MemoryBytes = m.Memory.Usage // bytes

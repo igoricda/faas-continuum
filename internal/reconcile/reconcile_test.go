@@ -24,7 +24,7 @@ import (
 // no real daemon is needed.
 type fakeRuntime struct {
 	mu          sync.Mutex
-	running     map[string]bool // instanceID -> está com task Running
+	running     map[string]bool // the instance identifier maps to a running task
 	removed     []string
 	adopted     []string
 	listErr     error

@@ -1,14 +1,15 @@
 package gateway
 
-// Unitários do Passo 4.3 (adendo 2026-09-30): pendencySet (arm/settle/
-// cancel/drain, Dec exatamente 1x, settled nunca bloqueia) e o ramo
-// assíncrono dentro da fatia (anunciado-rápido == síncrono, sem armamento).
+// Unit tests of the set of pending reports, with the arming, the settlement, the
+// cancellation and the drain, a single decrement, and a settled report that never
+// blocks, plus the asynchronous branch within the slice, where an announced node
+// that answers fast behaves as the synchronous path without arming.
 //
-// Gate test-audit: protegem D2 (Dec adiado, 1x) e o armamento (registro
-// orcamento_excedido + contador + join no drain). Regressão crível: Dec
-// perdido no drain (gauge vaza), Dec duplo (contagem negativa) ou armamento
-// espúrio em resposta rápida. Sem cobertura existente (código novo). Sem
-// seam novo (tipos de produção + httptest, sem export extra).
+// They protect the deferred single decrement and the arming, which records the
+// exceeded budget, increments the counter and joins in the drain. The credible
+// regressions are a lost decrement in the drain, which leaks the meter, a double
+// decrement, which makes the count negative, and a spurious arming on a fast
+// answer.
 import (
 	"context"
 	"net/http"
@@ -43,8 +44,9 @@ func invokeRecorder(t *testing.T, gw *Gateway, body string) *httptest.ResponseRe
 	return rec
 }
 
-// Anunciado que responde dentro da fatia segue o caminho síncrono: 200 sem
-// header tardio, sem armamento, sem sobra no gauge.
+// An announced node that answers within the slice follows the synchronous path:
+// a success without the late header, without arming and without a leftover in the
+// meter.
 func TestAsyncFastEqualsSync(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -72,11 +74,12 @@ func TestAsyncFastEqualsSync(t *testing.T) {
 	}
 }
 
-// Endereçamento por CATEGORIA (função pedida "detect", registrada como
-// yolo26n-coco): o anúncio D1 é por nome de função (concreto) e o opt-in tem
-// de resolver a categoria antes do lookup — regressão: lookup pela função
-// pedida não acha o anúncio e o invoke cai no caminho síncrono (a fatia corta
-// a tentativa em vez de entregá-la tarde).
+// Addressing by category: the requested function is a category and the
+// registered one is a concrete variant, so the announcement of the function
+// timeout is per concrete name and the opt-in has to resolve the category before
+// the lookup. Otherwise the lookup by the requested function does not find the
+// announcement and the invocation falls into the synchronous path, which cuts
+// the attempt instead of delivering it late.
 func TestBestEffortCategoryAddressing(t *testing.T) {
 	srv := lateSuccessServer(t, 300*time.Millisecond, `{"result":"categoria"}`)
 	ns, _ := nodes.NewNodeStore("")
@@ -90,7 +93,7 @@ func TestBestEffortCategoryAddressing(t *testing.T) {
 	})
 	gw := waitTestGateway(t, ns, "")
 
-	// SLO 100ms: fatia ~50ms < 300ms da resposta => pendência armada.
+	// An objective of one hundred milliseconds gives a slice of about fifty, which is below the response of three hundred, so the pending report is armed.
 	rec := invokeRecorder(t, gw, `{"function":"detect","slo":{"max_latency_ms":100},"input":{"a":1}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
@@ -106,9 +109,9 @@ func TestBestEffortCategoryAddressing(t *testing.T) {
 	}
 }
 
-// Estouro da fatia arma a pendência: orcamento_excedido no invLog, contador,
-// gauge zerado no retorno (drain executou o Dec adiado) e cliente com o
-// failure (sem fase de espera ainda — Passo 4.4).
+// The overflow of the slice arms the pending report: an exceeded budget in the
+// log, the counter, the meter back to zero on the return, since the drain ran the
+// deferred decrement, and the client with the failure, without the stage of wait.
 func TestArmOnSliceExpiry(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -131,7 +134,7 @@ func TestArmOnSliceExpiry(t *testing.T) {
 	defer l.Close()
 	gw.SetInvocationLog(l)
 
-	// SLO curto força a fatia a estourar com o nó bloqueado.
+	// A short objective forces the slice to overflow with the node blocked.
 	rec := invokeRecorder(t, gw, `{"function":"fn","slo":{"max_latency_ms":100},"input":{"a":1}}`)
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status=%d want 504 body=%s", rec.Code, rec.Body.String())
@@ -139,8 +142,8 @@ func TestArmOnSliceExpiry(t *testing.T) {
 	if armed, _, _, _ := gw.BestEffortCounters(); armed != 1 {
 		t.Fatalf("armed=%d want 1", armed)
 	}
-	// O armamento gravou orcamento_excedido; o drain (pós-resposta, 2026-10-01/2)
-	// supersede com o desfecho REAL (timeout no cap) e só então executa o Dec.
+	// The arming recorded an exceeded budget, and the drain after the answer supersedes
+	// it with the real outcome, which is the timeout at the ceiling, and only then runs the decrement.
 	deadline := time.Now().Add(2 * time.Second)
 	for ig.NodeK("n1") != 0 {
 		if time.Now().After(deadline) {
@@ -154,7 +157,7 @@ func TestArmOnSliceExpiry(t *testing.T) {
 	}
 }
 
-// D7: teto de pendências = maxRaceFanout — além do teto, arm recusa.
+// The ceiling of pending reports is the fan-out of the race, so beyond it the arming is refused.
 func TestPendencySetMaxFanout(t *testing.T) {
 	set := newPendencySet(4, 1)
 	first := &pendingAttempt{done: make(chan struct{})}
@@ -170,14 +173,14 @@ func TestPendencySetMaxFanout(t *testing.T) {
 	}
 }
 
-// D7: ramo sem armamento corta no overall (ou na desconexão), nunca no cap do
-// nó — sem o corte, uma tentativa que a espera não entregará seguraria o laço
-// até o cap anunciado (validação permite até 24h).
+// The branch without arming cuts at the overall budget or at the disconnection,
+// and never at the ceiling of the node, since without the cut an attempt that
+// the wait will not deliver would hold the loop up to the announced ceiling.
 func TestD7RejectCutsAtOverallNotCap(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
-		case <-release: // trava até o árbitro cortar; release libera o Close
+		case <-release: // the request stays blocked until the arbiter cuts it, and the release frees the close
 		case <-r.Context().Done():
 		}
 	}))
@@ -188,7 +191,7 @@ func TestD7RejectCutsAtOverallNotCap(t *testing.T) {
 	_, _ = ns.Upsert(node)
 	gw := newTestGateway(ns)
 
-	// Conjunto cheio: a armação é recusada (mesmo ramo do teste do teto).
+	// The set is full, so the arming is refused, which is the same branch of the test of the ceiling.
 	set := newPendencySet(2, 1)
 	if !set.arm(&pendingAttempt{}) {
 		t.Fatalf("primeira armação deveria caber no teto")
@@ -221,11 +224,11 @@ func TestD7RejectCutsAtOverallNotCap(t *testing.T) {
 	}
 }
 
-// Drain NÃO cancela mais (2026-10-01/2): espera a órfã concluir sozinha,
-// assenta o desfecho real (aprendizado — supersede do orcamento_excedido, sem
-// entrega) e executa o Dec exatamente 1x, mesmo com drain duplo. A cancelada
-// (desconexão do cliente) é contada, sem assentamento. Regressões críveis: o
-// drain voltar a cancelar (perde a amostra e o container quente), vazar o Dec
+// The drain no longer cancels: it waits for the orphan to conclude alone,
+// settles the real outcome, which feeds the learning and supersedes the exceeded
+// A client disconnection is counted, without a settlement. The credible
+// regressions are the drain cancelling again, which loses the sample and the
+// warm container, a leaked decrement, and a double settlement in a double drain.
 // ou reassentar a Entry no drain duplo.
 func TestPendencySetDrainSettlesOrphanOnce(t *testing.T) {
 	gw, node, now, logPath, pa, out := settleFixture(t, "req-drain")
@@ -238,11 +241,11 @@ func TestPendencySetDrainSettlesOrphanOnce(t *testing.T) {
 	if !set.arm(pa) {
 		t.Fatalf("arm recusado")
 	}
-	// O "nó" conclui sozinho (sem cancelamento nosso): a órfã segue até o
-	// fim, como no dispatch real.
+	// The node concludes alone, without a cancellation from the arbiter, so the
+	// orphan runs to the end as in the real dispatch.
 	close(pa.done)
 	gw.drainPendencies(set)
-	gw.drainPendencies(set) // idempotente: não Dec 2x nem reassenta.
+	gw.drainPendencies(set) // idempotent, without a double decrement and without a second settlement
 	if got := decs.Load(); got != 1 {
 		t.Fatalf("decs=%d want exatamente 1", got)
 	}

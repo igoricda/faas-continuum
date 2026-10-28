@@ -17,8 +17,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// Os conectores satisfazem a porta estruturalmente, sem importar o
-// consumidor (DIP/ISP, ADR-0011 item 1 — sem import reverso).
+// The connectors satisfy the port structurally, without importing the consumer,
+// which inverts the dependency and respects the interface segregation.
 var (
 	_ RemoteExecutor = (*cloud.Connector)(nil)
 	_ RemoteExecutor = (*cloud.AzureFunctionsConnector)(nil)
@@ -28,8 +28,8 @@ var (
 	_ ColdEstimator  = (*cloud.GenericHTTPConnector)(nil)
 )
 
-// fakeRemote é o mock mínimo da porta (ADR-0011, item 1): o gateway é
-// testado isolado da infra de nuvem.
+// fakeRemote is the minimal mock of the port, so the gateway is tested isolated
+// from the cloud infrastructure.
 type fakeRemote struct {
 	configured bool
 	body       []byte
@@ -62,8 +62,8 @@ func cloudTestReq(fn string) InvocationRequest {
 	return InvocationRequest{Function: fn, Input: json.RawMessage(`{"a":1}`)}
 }
 
-// Sem porta (nil) ou não configurado => false (ADR-0011, item 1): o
-// chamador responde com o último failure da fila.
+// Without a port or without a configuration the result is false, so the caller
+// answers with the last failure of the queue.
 func TestGatewayCloudPort_UnconfiguredReturnsFalse(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	gw := NewGatewayWithHistory(GatewayConfig{
@@ -93,8 +93,9 @@ func TestGatewayCloudPort_UnconfiguredReturnsFalse(t *testing.T) {
 	}
 }
 
-// Sucesso via porta (ADR-0011, item 1): 200 com cloud_fallback:true,
-// instance cloud-fallback e fases; corpo não-JSON vira string JSON.
+// A success through the port gives a success marked as a cloud fallback, with
+// the instance of the cloud and the stages, and a non-JSON body becomes a JSON
+// string.
 func TestGatewayCloudPort_Success(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	var calls int32
@@ -146,8 +147,8 @@ func TestGatewayCloudPort_Success(t *testing.T) {
 	}
 }
 
-// Falha via porta (ADR-0011, item 1): 502 CLOUD_FALLBACK_FAILED com
-// retryable herdado da causa raiz e fallback_applied:true.
+// A failure through the port gives a bad gateway marked as a failed cloud
+// fallback, with the retryable flag inherited from the root cause.
 func TestGatewayCloudPort_Failure(t *testing.T) {
 	for _, wantRetry := range []bool{true, false} {
 		ns, _ := nodes.NewNodeStore("")
@@ -176,8 +177,8 @@ func TestGatewayCloudPort_Failure(t *testing.T) {
 	}
 }
 
-// Orçamento esgotado (ADR-0011, item 1): remaining<=0 NÃO chama a nuvem e
-// devolve o último failure (sem recordCloudAttempt).
+// An exhausted budget does not call the cloud and returns the last failure,
+// without recording a cloud attempt.
 func TestGatewayCloudPort_BudgetExpired(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	var calls int32
@@ -208,8 +209,8 @@ func TestGatewayCloudPort_BudgetExpired(t *testing.T) {
 	}
 }
 
-// Cold_start propaga do estimador opcional às métricas (ADR-0011, emenda
-// cold-start): sem ColdEstimator ou com false, segue false como antes.
+// The cold start propagates from the optional estimator to the metrics, and
+// without an estimator or with a false value it stays false as before.
 func TestGatewayCloudPort_ColdStartPropagation(t *testing.T) {
 	for _, cold := range []bool{false, true} {
 		ns, _ := nodes.NewNodeStore("")
@@ -240,9 +241,10 @@ func TestGatewayCloudPort_ColdStartPropagation(t *testing.T) {
 	}
 }
 
-// Shedding ponta a ponta (teto de admissão): com max=1 e a chamada em
-// voo presa na nuvem, o segundo invoke é recusado SEM tocar a rede
-// (502 CLOUD_FALLBACK_FAILED); liberado o slot, o próximo passa.
+// Shedding end to end, with an admission ceiling: with a single slot and the
+// call in flight stuck in the cloud, the second invocation is refused without
+// touching the network, with a bad gateway marked as a failed cloud fallback, and
+// once the slot is released the next one passes.
 func TestGatewayCloudPort_CapacityShedsWithoutNetwork(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -279,7 +281,7 @@ func TestGatewayCloudPort_CapacityShedsWithoutNetwork(t *testing.T) {
 		gw.Handle(rec, req)
 		first <- rec
 	}()
-	<-entered // slot único preso na nuvem
+	<-entered // the single slot is stuck in the cloud
 
 	req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(`{"function":"fn","input":{}}`))
 	rec := httptest.NewRecorder()
@@ -306,9 +308,9 @@ func TestGatewayCloudPort_CapacityShedsWithoutNetwork(t *testing.T) {
 	}
 }
 
-// Erro-200 do app ponta a ponta (ADR-0011, item 4): conector real sobre
-// httptest que devolve {"status":"error"} => CLOUD_FALLBACK_FAILED via
-// Handle com fila vazia.
+// Error inside a success, end to end, with the real connector over a test
+// server that answers an error status, which gives a failed cloud fallback
+// through the handler with an empty queue.
 func TestGatewayCloudPort_AppErrorEndToEnd(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -342,8 +344,8 @@ func TestGatewayCloudPort_AppErrorEndToEnd(t *testing.T) {
 	}
 }
 
-// Roteamento por função ponta a ponta (ADR-0011, item 2): duas funções
-// alcançam dois endpoints distintos via Handle com fila vazia.
+// Routing per function end to end: two functions reach two distinct endpoints
+// through the handler with an empty queue.
 func TestGatewayCloudPort_PerFunctionRouting(t *testing.T) {
 	mk := func(tag string, calls *int32) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

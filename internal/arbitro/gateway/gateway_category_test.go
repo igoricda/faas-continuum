@@ -1,11 +1,11 @@
 package gateway
 
-// Testes de resolve-then-forward por categoria (function-category-routing,
-// todo 7): o pedido (categoria ou concreto) é traduzido UMA vez por nó via
-// selection.ResolveConcrete para o concreto encaminhado na URL, enquanto
-// TODOS os recordAttempt registram sob o grupo resolvido uma vez por
-// invoke; 404 em concreto obsoleto continua para o próximo nó, 503 nomeia
-// o pedido e 401 não faz failover.
+// Tests of the resolution followed by forwarding per category: the request,
+// either a category or a concrete variant, is translated once per node into the
+// concrete variant forwarded in the address, while every recording of an
+// attempt happens under the resolved group once per invocation. A not found
+// answer for a stale concrete variant continues to the next node, the rejection
+// names the request and an unauthorized answer does not fail over.
 
 import (
 	"net/http"
@@ -92,7 +92,7 @@ func TestGateway_CategoryPerNodeConcreteURLs(t *testing.T) {
 		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
 	}
 
-	// O pedido de categoria chega a um concreto; a URL leva o concreto.
+	// The category request reaches a concrete variant, and the address carries the concrete variant.
 	mu.Lock()
 	defer mu.Unlock()
 	if len(paths) != 1 {
@@ -102,7 +102,7 @@ func TestGateway_CategoryPerNodeConcreteURLs(t *testing.T) {
 		t.Fatalf("path=%q want /function/<concreto-da-categoria>/invoke", paths[0])
 	}
 
-	// Histórico chaveado pelo grupo, nunca pelo concreto.
+	// The history is keyed by the group, and never by the concrete variant.
 	for _, k := range h.Keys() {
 		if !strings.Contains(k, "alpr-yolo") {
 			t.Fatalf("history key %q sem o grupo alpr-yolo", k)
@@ -137,7 +137,7 @@ func TestGateway_CategoryWildcardForwardsRequested(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewNodeStore: %v", err)
 	}
-	// Nó wildcard: sem Functions, serve tudo — encaminha o pedido verbatim.
+	// A wildcard node, without functions, serves everything and forwards the request verbatim.
 	if _, err := ns.Upsert(nodes.Node{NodeID: "wild-1", Layer: nodes.LayerBorda, Host: hostFromURL(t, srv.URL)}); err != nil {
 		t.Fatalf("Upsert: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestGateway_CategoryStale404Continues(t *testing.T) {
 			mu.Lock()
 			paths = append(paths, r.URL.Path)
 			mu.Unlock()
-			// Mapa obsoleto no primeiro contato: 404 = stale → continua.
+			// A stale map at the first contact gives a not found answer, which continues the queue.
 			if atomic.CompareAndSwapInt64(&first, 0, 1) {
 				w.WriteHeader(http.StatusNotFound)
 				_, _ = w.Write([]byte(`{"code":"FUNCTION_NOT_FOUND"}`))

@@ -1,8 +1,7 @@
-// Cobertura do suporte a finetune/ablação (SELETOR-V2 §10, Fase 5):
-// Config.RiskOverride troca os knobs do RiskSelector no modo risk;
-// override inválido => Run falha fail-fast. (As grades de finetune
-// eram harness temporário, consolidado em
-// docs/plans/selection-v2-finetune.md e removido.)
+// Coverage of the support for the tuning and the ablation of the selector: the
+// configuration of the risk override swaps the knobs of the risk selector in
+// the risk mode, and an invalid override makes the run fail fast. The grids of
+// the tuning were a temporary harness, and they were consolidated and removed.
 package sim
 
 import (
@@ -25,11 +24,11 @@ func overrideTestCal(t *testing.T) *Calibracao {
 	return cal
 }
 
-// TestRiskOverrideInvalidFails: knobs fora do domínio (§10) abortam o Run.
+// TestRiskOverrideInvalidFails: the knobs outside the valid domain abort the run.
 func TestRiskOverrideInvalidFails(t *testing.T) {
 	cal := overrideTestCal(t)
 	bad := selection.DefaultRiskConfig()
-	bad.Stretch = 0.5 // domínio: >= 1
+	bad.Stretch = 0.5 // the valid domain requires a value of at least one
 	_, err := Run(Config{Seed: 7, MaxCPU: 300, MaxMem: 90, RiskOverride: &bad}, Cenario{
 		Nome: "ov-invalido", Modo: ModoRisk, Tipo: "burst", SLO: 0,
 		Workers: 2, Duracao: 2 * time.Second,
@@ -40,7 +39,7 @@ func TestRiskOverrideInvalidFails(t *testing.T) {
 	t.Logf("erro esperado: %v", err)
 }
 
-// TestRiskOverrideSmoke: override válido roda e alimenta EscolhasRisk.
+// TestRiskOverrideSmoke: a valid override runs and feeds the risk choices.
 func TestRiskOverrideSmoke(t *testing.T) {
 	cal := overrideTestCal(t)
 	ov := selection.DefaultRiskConfig()

@@ -1,15 +1,16 @@
-// Package e2e_test — rajada de capacidade sleep/max_instances=1.
+// Package e2e_test, the burst of capacity with a sleep and a single instance.
 //
-// Prova ponta a ponta (capacity-history-arbitro, todo 8) com Gateway,
-// History e invLog REAIS + 2 nós httptest simulados (sem containerd, sem
-// rede externa). Cenário fixo para reuso do todo 9 (overhead): N=10,
-// concorrência 10, sleep_ms=200 — NÃO alterar sem alinhar com o todo 9.
+// It proves the behavior end to end with a real gateway, a real history and a
+// real invocation log, plus two simulated nodes over a test server, without
+// containerd and without an external network. The scenario is fixed and is
+// reused for the comparative measurement of the piggyback against the periodic
+// report, so the number of requests, the concurrency and the sleep have to stay.
 //
-// Determinismo: o nó saturado aplica max_instances=1 com gate REAL
-// (semáforo com/unbuffered cap 1; excedente => 503 POOL_EXHAUSTED) e um
-// bloqueador HTTP segura o único slot durante toda a rajada (sinal
-// `acquired`, sem time.Sleep-prayer). Sincronização via canais/WaitGroup
-// + timeout global limitado (sem hangs no CI).
+// Determinism: the saturated node applies a single instance with a real gate, a
+// semaphore of one slot where the excess is rejected immediately, and an HTTP
+// blocker holds the only slot during the whole burst, which announces that it
+// acquired it without sleeping and hoping. The synchronization uses channels and
+// a wait group, with a global timeout so the suite never hangs.
 package e2e_test
 
 import (
@@ -35,16 +36,17 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// Parâmetros fixos da rajada (todo 9 reutiliza este cenário para a medição
-// comparativa piggyback-on vs periodic-only — manter N/conc/sleep_ms).
+// Fixed parameters of the burst, which the comparative measurement reuses, so the
+// number of requests, the concurrency and the sleep have to stay.
 const (
 	burstN       = 10
 	burstConc    = 10
 	burstSleepMS = 200
 )
 
-// Token de invocação repassado verbatim pelo Gateway ao nó (o Árbitro não
-// interpreta nem registra o token — enforcement no nó, como em produção).
+// The invocation token is forwarded verbatim by the gateway to the node, since the
+// arbiter neither interprets nor records it and the enforcement is on the node,
+// as in production.
 const burstInvokeToken = "Bearer e2e-invoke-token"
 
 var burstLimits = selection.LimitsConfig{
@@ -53,14 +55,14 @@ var burstLimits = selection.LimitsConfig{
 	MaxPSIAvg10: 25,
 }
 
-// simNode é um nó httptest com gate REAL de max_instances: sem==nil =>
-// capacidade ilimitada (alternativa livre); sem cap 1 => max_instances=1
-// (excedente rejeita 503 POOL_EXHAUSTED imediato, sem enfileirar).
+// simNode is a test server node with a real gate of the maximum of instances: a
+// nil value means an unlimited capacity, while a gate of one slot rejects the
+// excess immediately with an exhausted pool, without queueing it.
 type simNode struct {
 	id       string
 	token    string
 	sem      chan struct{} // nil = sem teto
-	acquired chan struct{} // sinal por aquisição (buffered; prova slot tomado)
+	acquired chan struct{} // signal of the acquisition, buffered, which proves that the slot is taken
 	hits     atomic.Int64
 	rejected atomic.Int64
 }
@@ -130,9 +132,9 @@ type burstResult struct {
 	latMS  int64
 }
 
-// runBurst dispara n invokes concorrentes (conc de cada vez sob barreira de
-// largada) contra gw.Handle e devolve os resultados. Timeout global de 30s
-// falha o teste (sem hangs no CI).
+// runBurst fires concurrent invocations, one at a time under a starting barrier,
+// against the handler of the gateway and returns the results. A global timeout
+// of thirty seconds fails the test, so the suite never hangs.
 func runBurst(t *testing.T, gw *gateway.Gateway, n, conc, sleepMS int) []burstResult {
 	t.Helper()
 	out := make([]burstResult, n)
@@ -176,8 +178,9 @@ func runBurst(t *testing.T, gw *gateway.Gateway, n, conc, sleepMS int) []burstRe
 	}
 }
 
-// burstArbiter monta o Árbitro REAL (NodeStore + Monitor + History +
-// invLog + RiskSelector + Gateway) sobre os nós simulados.
+// burstArbiter builds the real arbiter, with the store of nodes, the monitor, the
+// history, the invocation log, the risk selector and the gateway, over the
+// simulated nodes.
 func burstArbiter(t *testing.T, dir, histName, logName string, regs []nodes.Node) (*gateway.Gateway, *history.History, string, string) {
 	t.Helper()
 	ns, err := nodes.NewNodeStore("")
@@ -200,9 +203,9 @@ func burstArbiter(t *testing.T, dir, histName, logName string, regs []nodes.Node
 	if err != nil {
 		t.Fatalf("NewInvocationLog: %v", err)
 	}
-	// Seletor canônico (ADR-0012): RiskSelector com learner alimentado pelo
-	// replay do seed + hook ao vivo (o histórico do burst ensina o modelo
-	// durante a própria corrida).
+	// The canonical selector, with a learner fed by the replay of the seed and a
+	// live hook, so the history of the burst teaches the model during the run
+	// itself.
 	riskCfg := selection.DefaultRiskConfig()
 	learner := learn.NewLearner(riskCfg.LearnConfig())
 	selection.ReplayRiskHistory(h, learner)
@@ -235,8 +238,9 @@ func burstArbiter(t *testing.T, dir, histName, logName string, regs []nodes.Node
 	return gw, h, histPath, logPath
 }
 
-// holdSlot segura o único slot do nó via HTTP real (sleep longo) e só
-// retorna após o sinal `acquired` — o slot está tomado, sem prayer.
+// holdSlot holds the only slot of the node over a real HTTP call with a long
+// sleep and returns only after the slot was acquired, so there is no sleep and
+// no hope.
 func holdSlot(t *testing.T, nodeURL string, sleepMS int) (waitDone func()) {
 	t.Helper()
 	type blockerRes struct {
@@ -304,7 +308,7 @@ func archiveEvidence(t *testing.T, srcHist, srcLog, dstHist, dstLog string) {
 	t.Logf("evidência arquivada: %s (%dB), %s", dstHist, len(mustReadFile(t, dstHist)), dstLog)
 }
 
-// sleepSegmentKeys devolve as chaves do History para a função sleep.
+// sleepSegmentKeys returns the keys of the history for the sleep function.
 func sleepSegmentKeys(h *history.History) []string {
 	var out []string
 	for _, k := range h.Keys() {
@@ -315,14 +319,17 @@ func sleepSegmentKeys(h *history.History) []string {
 	return out
 }
 
-// TestE2E_CapacityBurstWithAlternative — cenário (a): B (borda,
-// max_instances=1) saturado via bloqueador + A (névoa) livre e ilimitado.
-// Ordem determinística B→A via layerRank (borda=0 < névoa=1): todo invoke
-// tenta B primeiro (503 POOL_EXHAUSTED => History registra a falha SEM
-// latência (D37), invLog keep, MarkExhausted) e faz failover para A (200).
-// Invariantes: >=90% sem NODE_OVERLOADED; History de A == sucessos; History
-// de B == rejeições (Total) sem latência; invLog == 100% das tentativas;
-// p95 do segmento de A == p95 só-sucesso (±1ms).
+// TestE2E_CapacityBurstWithAlternative is the first scenario: the saturated edge
+// with a single instance and the free unlimited fog. The order is deterministic
+// from the layer, with the edge before the fog, so every invocation tries the
+// edge first, which rejects it with an exhausted pool, and the history records
+// the failure without a latency while the log keeps it and the variant is
+// marked as exhausted, and then the request fails over to the fog, which
+// succeeds. The invariants are that almost no invocation reports an overload,
+// that the history of the fog holds only the successes, that the history of the
+// edge holds only the rejections without a latency, that the log holds every
+// attempt and that the percentile of the segment of the fog is the percentile of
+// the successes.
 func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	dir := t.TempDir()
 	nodeB := &simNode{id: "edge-hot", token: burstInvokeToken, sem: make(chan struct{}, 1), acquired: make(chan struct{}, 64)}
@@ -338,7 +345,7 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 		{NodeID: "fog-cold", Layer: nodes.LayerNevoa, Host: hostOf(srvA.URL), Functions: []string{"sleep"}},
 	})
 
-	// Satura B: bloqueador HTTP segura o único slot (sleep 3000ms >> rajada).
+	// Saturate the edge: the HTTP blocker holds the only slot for much longer than the burst.
 	waitBlocker := holdSlot(t, srvB.URL, 3000)
 	select {
 	case <-nodeB.acquired:
@@ -377,9 +384,10 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 		t.Fatalf("hitsA=%d, want == sucessos (%d): A deve servir cada sucesso 1x", nodeA.hits.Load(), nOK)
 	}
 
-	// History: 2 segmentos sleep — fog-cold só sucessos (Count == Total ==
-	// nOK) e edge-hot só as falhas de capacidade (D37: Total sobe, SEM
-	// latência — Count/p95 intocados).
+	// The history holds two segments for the sleep function, the cold fog with only
+	// the successes and the hot edge with only the capacity failures, where the
+	// total grows without a latency and the count and the percentile stay
+	// untouched.
 	keys := sleepSegmentKeys(h)
 	if len(keys) != 2 {
 		t.Fatalf("segmentos sleep = %d (%v), want 2 (sucessos em A + falhas em B)", len(keys), keys)
@@ -412,10 +420,10 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	if countB != 0 || p95B != 0 {
 		t.Fatalf("History de B: Count=%d p95=%d, want 0/0 (falha de capacidade sem latência)", countB, p95B)
 	}
-	// As rejeições de B são SATURAÇÃO: fora da taxa de serviço, mas
-	// contabilizadas (plano-sinal-saturacao-selflearning D1). Antes elas
-	// entravam em Total e derrubavam a taxa — foi o que passou a banir nós
-	// saturados, e não é o que este teste quer mais dizer.
+	// The rejections of the edge are saturation: outside the service rate but
+	// counted separately. Before they entered the total and lowered the rate,
+	// which is what banned the saturated nodes, and that is not what this test
+	// means to say.
 	if totalB != 0 {
 		t.Fatalf("History de B: Total=%d, want 0 (rejeição é saturação, não serviço)", totalB)
 	}
@@ -425,7 +433,7 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	clientP95 := p95deOrdenados(successLat)
 	t.Logf("p95: segmento=%dms cliente-fim-a-fim=%dms (inclui failover B→A)", segP95, clientP95)
 
-	// invLog: 100% das tentativas (sucessos em A + rejeições em B).
+	// The log holds every attempt, the successes of the fog and the rejections of the edge.
 	lines := nonEmptyLines(t, mustReadFile(t, logPath))
 	wantLines := int64(nOK) + burstHitsB
 	if int64(len(lines)) != wantLines {
@@ -463,10 +471,10 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	if okLines != nOK || int64(rejLines) != burstHitsB {
 		t.Fatalf("invLog ok=%d rej=%d, want ok=%d rej=%d", okLines, rejLines, nOK, burstHitsB)
 	}
-	// p95 do segmento de A == p95 só-sucesso: o invLog guarda 100% das
-	// tentativas (sucessos ~200ms + rejeições ~1ms), mas as rejeições entram
-	// no History SEM latência (D37) — o p95 do segmento de A continua o dos
-	// sucessos (±1ms de jitter).
+	// The percentile of the segment of the fog is the percentile of the successes:
+	// the log holds every attempt, the successes and the fast rejections, but the
+	// rejections enter the history without a latency, so the percentile of the
+	// segment stays the one of the successes.
 	successP95 := p95deOrdenados(invLogSuccessLat)
 	t.Logf("p95 só-sucesso (invLog)=%dms", successP95)
 	if d := segP95 - successP95; d < -1 || d > 1 {
@@ -477,10 +485,11 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	archiveEvidence(t, histPath, logPath, "/tmp/e2e-capacity/history.json", "/tmp/e2e-capacity/invlog.jsonl")
 }
 
-// TestE2E_CapacityBurstSingleSaturatedNode — cenário (b): nó único C
-// (max_instances=1) saturado via bloqueador, sem alternativa. A rajada deve
-// receber 503 NODE_OVERLOADED rápido (<< sleep_ms), com as rejeições no
-// History como falha SEM latência (D37) e 100% das tentativas no invLog.
+// TestE2E_CapacityBurstSingleSaturatedNode is the second scenario: a single node
+// with one instance, saturated by a blocker and with no alternative. The burst
+// must receive the overload rejection quickly, much faster than the sleep, with
+// the rejections in the history as failures without a latency and every attempt
+// in the log.
 func TestE2E_CapacityBurstSingleSaturatedNode(t *testing.T) {
 	dir := t.TempDir()
 	nodeC := &simNode{id: "edge-solo", token: burstInvokeToken, sem: make(chan struct{}, 1), acquired: make(chan struct{}, 64)}
@@ -512,8 +521,9 @@ func TestE2E_CapacityBurstSingleSaturatedNode(t *testing.T) {
 	}
 	t.Logf("rajada sem alternativa: 503=%d/%d hitsC=%d rejC=%d", burstN, burstN, nodeC.hits.Load()-baseC, nodeC.rejected.Load())
 
-	// History: 1 segmento sleep com as rejeições (D37: Total sobe, SEM
-	// latência — Count/p95 intocados).
+	// The history holds one segment for the sleep function with the rejections, where
+	// the total grows without a latency and the count and the percentile stay
+	// untouched.
 	keys := sleepSegmentKeys(h)
 	if len(keys) != 1 {
 		t.Fatalf("segmentos sleep = %v, want 1 (falhas de C sem latência)", keys)
@@ -532,23 +542,23 @@ func TestE2E_CapacityBurstSingleSaturatedNode(t *testing.T) {
 	if count != 0 || segP95 != 0 {
 		t.Fatalf("Count=%d p95=%d, want 0/0 (falha de capacidade sem latência)", count, segP95)
 	}
-	// Rejeição é saturação: fora da taxa de serviço, contabilizada à parte
-	// (D1). O que este teste assegura é que o nó SATURADO fica registrado
-	// como tal e que o cliente recebeu 503 NODE_OVERLOADED nos 10 casos.
+	// A rejection is saturation, outside the service rate and counted apart. What
+	// this test ensures is that the saturated node is recorded as such and that the
+	// client received the overload rejection in every case.
 	if total != 0 {
 		t.Fatalf("Total=%d, want 0 (rejeição é saturação, não serviço)", total)
 	}
 	if full, okFull := h.StatsFull(wantKey, time.Minute, time.Now()); !okFull || full.Saturation != burstN {
 		t.Fatalf("Saturação=%d ok=%v, want %d/true", full.Saturation, okFull, burstN)
 	}
-	// O que importa na taxa: o nó NÃO pode ser vetado por ter recusado. Com
-	// Total=0 a taxa é LaplaceRate(0,0)=0,5, e VetoByRate exige `< 0,5` —
-	// a asserção antiga (`rate > 0.5`) passava vacuosa.
+	// What matters in the rate is that the node cannot be vetoed for having
+	// refused, so the assertion checks that the rate is above the threshold and
+	// not the other way around, since the previous assertion passed vacuously.
 	if history.VetoByRate(total, rate) {
 		t.Fatalf("taxa=%.2f: rejeição de capacidade vetou o nó (saturação não veta)", rate)
 	}
 
-	// invLog com 100% das tentativas (todas rejeições de C).
+	// The log holds every attempt, all of them rejections of the node.
 	lines := nonEmptyLines(t, mustReadFile(t, logPath))
 	if burstHitsC := nodeC.hits.Load() - baseC; int64(len(lines)) != burstHitsC || len(lines) != burstN {
 		t.Fatalf("invLog linhas=%d hitsC=%d, want %d (1 tentativa por invoke, sem failover)", len(lines), burstHitsC, burstN)

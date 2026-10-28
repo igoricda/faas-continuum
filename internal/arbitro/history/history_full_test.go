@@ -10,10 +10,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// fullFixture pré-carrega um segmento (grupo "grp", nó "n1", bucket 0-10%)
-// com TODAS as classes: solo (3, um sem CPU), contended (2, um sem CPU),
-// cold (2), Inflight>=3 (1), Inflight==0 (1), falha (1) e timeout (1).
-// Retorna o History e a chave primária.
+// fullFixture preloads a segment, with a group, a node and the lowest band, with
+// every class: solo, of which one has no processor usage, contended, of which one
+// has no processor usage, cold, with three or more requests in flight, with no
+// request in flight, a failure and a timeout. It returns the history and the
+// primary key.
 func fullFixture(t *testing.T, now time.Time) (*History, string) {
 	t.Helper()
 	h, err := NewHistory("", 1000)
@@ -211,12 +212,12 @@ func TestExpectedCostSoloOnlyAcrossBuckets(t *testing.T) {
 	entries := []Entry{
 		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 1, false, 20),
 		mk("grp", "n1", Bucket50_75, OutcomeSucesso, 1, false, 40),
-		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 2, false, 100),           // contended: excluído
-		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 1, true, 100),            // cold: excluído
-		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 1, false, 0),             // cpu desconhecido: excluído
-		mk("grp", "n1", Bucket0_10, OutcomeOrcamentoExcedido, 1, false, 100), // não é medida: excluído
-		mk("outro", "n1", Bucket0_10, OutcomeSucesso, 1, false, 100),         // outro grupo: excluído
-		mk("grp", "n2", Bucket0_10, OutcomeSucesso, 1, false, 100),           // outro nó: excluído
+		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 2, false, 100),           // contended: excluded
+		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 1, true, 100),            // cold: excluded
+		mk("grp", "n1", Bucket0_10, OutcomeSucesso, 1, false, 0),             // unknown processor usage: excluded
+		mk("grp", "n1", Bucket0_10, OutcomeOrcamentoExcedido, 1, false, 100), // not a measurement: excluded
+		mk("outro", "n1", Bucket0_10, OutcomeSucesso, 1, false, 100),         // another group: excluded
+		mk("grp", "n2", Bucket0_10, OutcomeSucesso, 1, false, 100),           // another node: excluded
 	}
 	for _, e := range entries {
 		if err := h.AppendWithGroup(e, e.FunctionName); err != nil {
@@ -231,7 +232,7 @@ func TestExpectedCostSoloOnlyAcrossBuckets(t *testing.T) {
 		t.Fatalf("ExpectedCost seeded=true, esperado false (média local)")
 	}
 
-	// Só contended => n==0 => ok=false.
+	// Only contended samples give a zero count and therefore report false.
 	h2, err := NewHistory("", 1000)
 	if err != nil {
 		t.Fatalf("NewHistory: %v", err)

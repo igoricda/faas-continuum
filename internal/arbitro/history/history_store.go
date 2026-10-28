@@ -61,7 +61,7 @@ type History struct {
 	costCache  map[string]costCacheEntry
 	psiCache   map[string]psiCacheEntry
 	usageCache map[string]usageCacheEntry
-	// observer is the hook of the second phase: it is called once per
+	// observer is the hook of the second stage: it is called once per
 	// append with the group and the entry, after the mutex is released.
 	// It is the single feeding point of the risk selector, without any
 	// change in the gateway, and an absent observer disables it.

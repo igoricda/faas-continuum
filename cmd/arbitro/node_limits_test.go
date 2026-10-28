@@ -1,10 +1,10 @@
 package main
 
-// O merge de `arbitro.node_limits` (mapa parcial por nó) no trio completo
-// que a seleção consulta. Estes testes protegem a regra do merge e o
-// diagnóstico de node_id fantasma — o merge é o único lugar onde o global
-// ainda é conhecido, então um erro aqui silenciosamente ligaria/desligaria
-// o limite de um nó inteiro.
+// The merge of the partial map of per-node limits into the complete trio that the
+// selection consults. These tests protect the rule of the merge and the
+// diagnosis of a phantom node identifier: the merge is the only place where the
+// global values are still known, so an error here would silently enable or
+// disable the ceiling of a whole node.
 
 import (
 	"slices"

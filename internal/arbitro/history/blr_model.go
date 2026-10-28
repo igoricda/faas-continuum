@@ -1,20 +1,25 @@
-// Conjugate Normal-Gamma BLR posterior over lat = c0+c1*x+c2*y with a
-// Student-t Upper90 band for the no-PSI usage-curve path (ADR-0007 D32).
-// Full calibration (tiers, floors, conformal) lives in docs/ADR-0007-algoritmo-selecao-dispositivo.md.
+// Conjugate Normal-Gamma posterior of the Bayesian linear regression over the
+// latency as a function of the intercept and of two covariates, with a
+// Student-t band at ninety percent for the usage curve without pressure data.
+// The calibration is composed of the parametric band, the floors and the
+// conformal correction.
 package history
 
-// Tier0 noise prior (ADR-0007 D32): a0=3, b0=a0*sigma0^2, sigma0=30ms warm jitter.
+// Noise prior of the parametric band: a shape of three, a rate of three times
+// the square of the standard deviation, and a warm jitter of thirty
+// milliseconds.
 const (
 	blrPriorA0 = 3.0
 	blrPriorB0 = 2700.0
 )
 
-// Tier0 width floor (ADR-0007 D32): halfwidth = max(t_halfwidth,
-// conformal_halfwidth, floorAbs, floorRel*|point|). floorRel = 7% (in the
-// 5-10% band) kills degenerate sub-percent bands (Track C tail: a 5ms
-// miss on a 1.1% band — floored to 7% it covers); floorAbs = 2ms is twice
-// the int64-millisecond timer granularity of ObservedLatencyMS, so the
-// band never claims sub-tick precision.
+// Floor of the width of the band: the halfwidth is the maximum between the
+// parametric halfwidth, the conformal halfwidth, an absolute floor and a
+// relative floor times the point estimate. The relative floor of seven
+// percent removes degenerate bands below one percent, which miss tails of a
+// few milliseconds, and the absolute floor of two milliseconds is twice the
+// millisecond granularity of the observed latency, so the band never claims a
+// precision below the tick of the timer.
 const (
 	blrFloorAbs = 2.0
 	blrFloorRel = 0.07

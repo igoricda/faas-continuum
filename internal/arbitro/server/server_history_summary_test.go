@@ -1,10 +1,10 @@
 package server
 
-// Testes do history_summary estendido (selflearning-cold-contention, todo 8):
-// expõe por segmento as classes solo/contended/cold e o fator de contenção
-// APRENDIDO (LEARNED-ONLY, via selection.EffectiveContentionFactor). O gate é
-// Total==0 (existência), então segmento só-cold ainda reporta cold_count.
-// count/p95_ms/recent_rps permanecem o contrato congelado (sempre presentes).
+// Tests of the extended summary of the history: it exposes per segment the
+// solo and contended classes, the cold class and the learned contention factor,
+// which comes from the shared helper. The gate is the total, so a segment with
+// only cold entries still reports the count of cold entries. The count, the
+// percentile and the recent rate remain the frozen contract, always present.
 
 import (
 	"encoding/json"
@@ -73,10 +73,13 @@ func getSummary(t *testing.T, handler http.Handler, token string) (map[string]Hi
 	return list.Nodes[0].HistorySummary, rr.Body.String()
 }
 
-// TestHistorySummaryColdContentionStats é o fixture cheio do plano: 5 solo
-// @1s (inflight==1, cpu 40) + 5 contended @2.3s (inflight==2) + 2 cold @30s =>
-// solo_p95 1000, contended_p95 2300, fator 2.3, cold_count 2, cold_mean 30000,
-// solo_cpu_pct_mean 40.
+// TestHistorySummaryColdContentionStats is the full fixture: five solo entries
+// at one second with one request in flight and a processor usage of forty, five
+// contended entries at two and a half seconds with two requests in flight and
+// two cold entries at thirty seconds, which give a solo percentile of one
+// thousand, a contended percentile of two thousand three hundred, a factor of
+// two and a half, a count of two cold entries, a cold mean of thirty thousand
+// and a mean processor usage of forty for the solo entries.
 func TestHistorySummaryColdContentionStats(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	handler, h, token := newSummaryEnv(t, now)
@@ -140,9 +143,10 @@ func TestHistorySummaryColdContentionStats(t *testing.T) {
 	}
 }
 
-// TestHistorySummaryThinClassesOmitFactor: classes finas (solo<5) => helper
-// EffectiveContentionFactor devolve ok=false e o campo é omitido do JSON,
-// mas os campos de classe disponíveis (contended_p95, cold) seguem.
+// TestHistorySummaryThinClassesOmitFactor: with thin classes, fewer than five
+// solo entries, the helper of the contention factor reports false and the field
+// is omitted from the JSON, while the available class fields, the contended
+// percentile and the cold one, remain.
 func TestHistorySummaryThinClassesOmitFactor(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	handler, h, token := newSummaryEnv(t, now)
@@ -199,8 +203,9 @@ func TestHistorySummaryThinClassesOmitFactor(t *testing.T) {
 	}
 }
 
-// TestHistorySummaryColdOnlyReportsCold: segmento SEM solo (fator omitido),
-// mas o gate Total==0 deixa o só-cold reportar cold_count/cold_mean_ms.
+// TestHistorySummaryColdOnlyReportsCold: a segment without a solo entry omits
+// the factor, but the gate of the total lets the cold entries report their count
+// and their mean.
 func TestHistorySummaryColdOnlyReportsCold(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	handler, h, token := newSummaryEnv(t, now)

@@ -571,7 +571,7 @@ func TestNodeTokenConcurrentVerify(t *testing.T) {
 	// lock. Issuing the same identifier concurrently would invalidate
 	// the plaintext and make the result flaky by construction, and the
 	// race between two concurrent writes is already covered by the race
-	// detector in the separate phases.
+	// detector in the separate stages.
 	plains := make(map[string]string, 8)
 	for i := 0; i < 8; i++ {
 		id := fmt.Sprintf("no-%d", i)

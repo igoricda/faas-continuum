@@ -12,11 +12,11 @@ import (
 	"time"
 )
 
-// workloadClient drives the load of the runner, with the two phases of the
+// workloadClient drives the load of the runner, with the two stages of the
 // recognition and of the OCR, against the real gateway and aggregates the
-// metrics of the client. There is one client per phase, and the priming uses
+// metrics of the client. There is one client per stage, and the priming uses
 // its own discarded instance, so the metrics and the latency of the measured
-// regime do not carry the warm-up phase.
+// regime do not carry the warm-up stage.
 type workloadClient struct {
 	url   string
 	sloMS int
@@ -88,7 +88,7 @@ func (c *workloadClient) invoke(fn string) {
 	c.mu.Unlock()
 }
 
-// disparo replicates the two-phase request of the runner, first the
+// disparo replicates the two-stage request of the runner, first the
 // recognition and then the OCR.
 func (c *workloadClient) disparo() { c.invoke("lpr"); c.invoke("ocr") }
 

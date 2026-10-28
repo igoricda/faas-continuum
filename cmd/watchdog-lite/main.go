@@ -4,8 +4,8 @@
 // on a Unix socket to that process, which listens on the loopback address at
 // the port of the container.
 //
-// The image of the function has to include this binary, define FPROCESS and
-// use the watchdog as its command or entry point.
+// The image of the function has to include this binary, set FPROCESS and use
+// the watchdog as its command or entry point.
 
 // The limited polling of the readiness endpoint, with a ceiling, is the only
 // exception to the event-driven design. The node side is event-driven through

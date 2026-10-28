@@ -155,7 +155,7 @@ type waitOutcome int
 const (
 	waitMatch   waitOutcome = iota // an event with the name of the socket
 	waitOther                      // outro arquivo (ignorado) ou batch vazio
-	waitInvalid                    // watch invalidado → fallback único
+	waitInvalid                    // the watch was invalidated, so the single fallback applies
 	waitCtxDone                    // ctx expirado/cancelado
 )
 

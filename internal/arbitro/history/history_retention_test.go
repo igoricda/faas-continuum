@@ -1,8 +1,9 @@
 package history
 
-// Cobertura do corte por idade (crescimento indefinido do histórico): poda
-// no SetRetention/load, poda periódica via compact, remoção de segmentos
-// vazios, invalidação dos caches derivados e flush só quando dirty.
+// Coverage of the cut by age, which prevents an unbounded growth of the history:
+// the pruning at the retention setting and at the load, the periodic pruning
+// through the compaction, the removal of the empty segments, the invalidation of
+// the derived caches and the flush only when there is something to write.
 
 import (
 	"encoding/json"
@@ -88,7 +89,7 @@ func TestSetRetentionTrimsAndDropsEmptySegments(t *testing.T) {
 		t.Fatalf("Stats=%d/%d ok=%v, want 1/1", count, total, ok)
 	}
 
-	// Idempotente: a segunda passada não acha nada.
+	// Idempotent: the second pass finds nothing.
 	removed2, segments2 := h.SetRetention(time.Hour)
 	if removed2 != 0 || segments2 != 0 {
 		t.Fatalf("segunda poda: removed=%d segments=%d, want 0/0", removed2, segments2)
@@ -203,8 +204,9 @@ func TestLoopPeriodicTrimPersists(t *testing.T) {
 	if err := h.AppendWithGroup(recent, "f"); err != nil {
 		t.Fatal(err)
 	}
-	// Entry antiga inserida direto no mapa (late orphan velho): só a poda
-	// periódica a alcança, e ela deve marcar dirty para o flush persistir.
+	// An old entry inserted directly into the map, which is an old late orphan, is
+	// only reached by the periodic pruning, and it has to mark the history as dirty
+	// so that the flush persists it.
 	key := SegmentKey("f", "n1", sc)
 	h.mu.Lock()
 	h.m[key] = append(h.m[key], Entry{NodeID: "n1", FunctionName: "f", Timestamp: time.Now().Add(-2 * time.Hour), Outcome: OutcomeSucesso, ObservedLatencyMS: 300})
@@ -215,7 +217,7 @@ func TestLoopPeriodicTrimPersists(t *testing.T) {
 		count, _, total, _, _ := h.Stats(key)
 		disk, err := readHistoryFile(t, path)
 		if count == 1 && total == 1 && err == nil && len(disk[key]) == 1 {
-			return // podada em memória e persistida
+			return // pruned in memory and persisted
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("poda periódica não estabilizou: mem=%d/%d disco=%d err=%v", count, total, len(disk[key]), err)
@@ -232,7 +234,7 @@ func TestFlushOnlyWhenDirty(t *testing.T) {
 	}
 	defer h.Close()
 
-	// Sem nenhuma mudança, o ticker de 500ms não cria/reescreve arquivo.
+	// Without any change, the ticker does not create or rewrite the file.
 	time.Sleep(700 * time.Millisecond)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("arquivo existe sem mudanças (err=%v) — flush incondicional?", err)
@@ -248,7 +250,7 @@ func TestFlushOnlyWhenDirty(t *testing.T) {
 		t.Fatalf("arquivo não persistiu após append: %v", err)
 	}
 
-	// Sem novos appends, o arquivo não é reescrito (mtime estável).
+	// Without new appends, the file is not rewritten and its modification time is stable.
 	time.Sleep(700 * time.Millisecond)
 	fi2, err := os.Stat(path)
 	if err != nil {

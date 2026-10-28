@@ -1,8 +1,9 @@
 package gateway
 
-// Ingestão de capacidade no gateway (capacity-history-arbitro, todo 5):
-// piggyback 2xx via recordAttempt funde no monitor, rejeição parseada
-// marca esgotado, mon==nil é no-op com invoke 2xx normal.
+// Ingestion of the capacity in the gateway: the piggyback of a successful
+// answer through the recording of the attempt merges into the monitor, a parsed
+// rejection marks the variant as exhausted, and an absent monitor does nothing
+// while the invocation succeeds normally.
 
 import (
 	"encoding/json"
@@ -42,7 +43,7 @@ func TestIngestPiggybackMergesCapacity(t *testing.T) {
 	metrics := piggybackMetrics(t, map[string]telemetry.FunctionCapacity{
 		"sleep": {MaxInstances: 1, InstancesAvailable: 0, QueueDepth: 2},
 	})
-	// hist+invLog nil: só a ingestão deve acontecer, sem panic.
+	// Without history or log only the ingestion happens, and it never panics.
 	gw.recordAttempt(node, 5*time.Millisecond, nil, nil, "sleep", "sleep", metrics, true, "", 0, attemptCapture{})
 
 	got, ok := mon.GetCapacity("n1", "sleep", now)
@@ -60,7 +61,7 @@ func TestIngestPiggybackTolerant(t *testing.T) {
 	gw := NewGatewayWithHistory(GatewayConfig{Monitor: mon, Clock: fixedClock(now)})
 	node := nodes.Node{NodeID: "n1"}
 
-	// Métrica sem capacity (nó antigo / coleta omitida) => skip, sem erro.
+	// A metric without capacity, from an older node or from an omitted collection, is skipped without an error.
 	for name, metrics := range map[string]json.RawMessage{
 		"nil":                    nil,
 		"vazio":                  json.RawMessage(`{}`),
@@ -81,7 +82,7 @@ func TestIngestMarksExhaustedOnParsedRejection(t *testing.T) {
 	gw := NewGatewayWithHistory(GatewayConfig{Monitor: mon, Clock: fixedClock(now)})
 	node := nodes.Node{NodeID: "n1"}
 
-	// Baseline fresco com avail>0 (periódico anterior).
+	// A fresh baseline with available instances, from the previous periodic report.
 	mon.UpdateCapacity("n1", "sleep", telemetry.FunctionCapacity{MaxInstances: 1, InstancesAvailable: 1}, now)
 
 	gw.recordAttempt(node, 3*time.Millisecond, capacityErr(t, "POOL_EXHAUSTED", "n1"), nil, "sleep", "sleep", nil, true, "", 0, attemptCapture{})
@@ -91,7 +92,7 @@ func TestIngestMarksExhaustedOnParsedRejection(t *testing.T) {
 		t.Fatalf("após rejeição = (%+v,%v), esperado (avail=0,true)", got, ok)
 	}
 
-	// Erro genérico (não-capacidade) não marca nada.
+	// A generic error, which is not about capacity, marks nothing.
 	mon2 := monitor.NewMonitor()
 	gw2 := NewGatewayWithHistory(GatewayConfig{Monitor: mon2, Clock: fixedClock(now)})
 	gw2.recordAttempt(node, 3*time.Millisecond, errors.New("boom"), nil, "sleep", "sleep", nil, true, "", 0, attemptCapture{})

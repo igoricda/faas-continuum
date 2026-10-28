@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// StartPprof inicia o servidor HTTP do pprof no endereço informado.
+// StartPprof starts the HTTP server of the profiler on the given address.
 func StartPprof(addr string) {
 	if addr == "" {
 		log.Println("arbitro: pprof disabled (no -pprof-addr flag)")

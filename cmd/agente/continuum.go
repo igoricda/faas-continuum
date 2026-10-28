@@ -17,7 +17,7 @@ import (
 
 func registerLoop(ctx context.Context, arbitroURL, nodeID, layer, host string, psiSupported bool, minInstances int, getFuncs func() []string, categories map[string]string, getExpected func() map[string]map[string]registry.ExpectedMetric, getCapacity func() map[string]int, getTimeouts func() map[string]int, token string) {
 	client := &http.Client{Timeout: 5 * time.Second}
-	// A single timer with phases: a retry of ten seconds until the first
+	// A single timer with stages: a retry of ten seconds until the first
 	// registration, then a heartbeat of sixty seconds. Two independent tickers
 	// used to emit about seven requests per minute in steady state.
 	tick := time.NewTicker(10 * time.Second)

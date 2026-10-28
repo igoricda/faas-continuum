@@ -1,9 +1,10 @@
 package gateway
 
-// Política de recordability por classe (ADR-0007, AUD-01/AUD-21): só
-// sucesso e timeout-legítimo entram no History (p95/Count = custo de
-// sucesso); capacidade, 401, 404, framing e falha genérica vão só para o
-// invLog, incondicional.
+// Policy of recordability per class: only a success and a legitimate timeout
+// enter the history, where the percentile and the count are the cost of a
+// success, while a capacity rejection, an unauthorized or not found answer, a
+// framing error and a generic failure go only to the invocation log,
+// unconditionally.
 
 import (
 	"context"
@@ -93,9 +94,10 @@ func TestHistoryCapacityWriteSkip(t *testing.T) {
 	gw.recordAttempt(node, 4*time.Millisecond, errors.New("boom"), slo, "fn-cap", group, nil, true, "", 0, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 	gw.recordAttempt(node, 6*time.Millisecond, context.DeadlineExceeded, slo, "fn-cap", group, nil, true, "", 0, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 
-	// Cenário AUD-01: falha genérica vai só ao invLog; timeout-legítimo é
-	// gravado no segmento mas fora do p95/Count (p95-sobre-sucessos) —
-	// segmento sem sucesso segue !ready para MinSamples.
+	// A generic failure goes only to the log, and a legitimate timeout is recorded
+	// in the segment but outside the percentile and the count, which cover only the
+	// successes, so a segment without a success stays unready for the minimum
+	// number of samples.
 	if len(h.Keys()) != 1 {
 		t.Fatalf("Keys após falha+timeout = %d, esperado 1 (só o timeout é gravado)", len(h.Keys()))
 	}
@@ -106,7 +108,7 @@ func TestHistoryCapacityWriteSkip(t *testing.T) {
 		t.Fatalf("invLog = %d linhas, esperado %d", got, len(rejections)+2)
 	}
 
-	// Um sucesso ancora o segmento: Count/p95 passam a refletir só ele.
+	// A single success anchors the segment, so the count and the percentile reflect only it.
 	gw.recordAttempt(node, 8*time.Millisecond, nil, slo, "fn-cap", group, nil, true, "", 0, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 	if count, p95, _, _, ok := h.Stats(key); !ok || count != 1 || p95 != 8 {
 		t.Fatalf("Stats após 1 sucesso = (%d,%d,%v), esperado (1,8,true)", count, p95, ok)
@@ -167,11 +169,12 @@ func TestRecordAttemptCapacitySkipsHistory(t *testing.T) {
 	cands := []nodes.Node{edgeNode}
 	mon := monitor.NewMonitor()
 	cfg := selection.DefaultRiskConfig()
-	// Evidência aprendida no learner (n_eff=5 >= nmin=3): B(~400+) >
-	// SLO 300 => candidato excluído pelo crivo de previsão e a fila chega
-	// vazia (paridade PREDICTED_OVER_SLO do v1; o Handle entrega
-	// 503/nuvem). O v1 decidia isso pelo gate ready do SegmentStats; o
-	// RiskSelector decide pelo limite superior calibrado B.
+	// The learned evidence, with five effective samples against a minimum of
+	// three, gives an upper bound above the objective, so the candidate is excluded
+	// by the guard of prediction and the queue arrives empty, with the handler
+	// answering the rejection or the cloud. The previous selector decided this
+	// through the readiness of the segment, and the risk selector decides it through
+	// the calibrated upper bound.
 	learner := learn.NewLearner(cfg.LearnConfig())
 	for i := 0; i < 5; i++ {
 		learner.Observe(edgeGroup, edgeNode.NodeID, learn.Obs{At: now, Outcome: learn.OutcomeSuccess, LatencyMS: 400, UseRegr: true, M: 1})
@@ -188,8 +191,9 @@ func TestRecordAttemptCapacitySkipsHistory(t *testing.T) {
 	if got := sel.Select(cands, "fn-edge", edgeSLO); len(got) != 0 {
 		t.Fatalf("Select com B> SLO = %d nós, esperado 0 (crivo de previsão)", len(got))
 	}
-	// Sem evidência (probation) o nó segue na fila por bootstrap — o RiskSelector
-	// nunca bane nó frio: a exploração vive na probation ao fim da fila.
+	// Without evidence, in the probation, the node stays in the queue through the
+	// bootstrap, since the risk selector never bans a cold node and the exploration
+	// lives in the probation at the end of the queue.
 	sel.Learner = learn.NewLearner(cfg.LearnConfig())
 	if got := sel.Select(cands, "fn-edge", edgeSLO); len(got) != 1 {
 		t.Fatalf("Select em probation = %d nós, esperado 1 (bootstrap)", len(got))

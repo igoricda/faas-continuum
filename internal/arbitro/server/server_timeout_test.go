@@ -9,14 +9,17 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// Ingestão de function_timeout_ms no POST /nodes (adendo 2026-09-30, Passo
-// 4.1, D1): round-trip POST→GET com a chave normativa + 400 INVALID_NODE em
-// chave fora de functions e valor fora de 1..86400000, sem alterar o store.
+// Ingestion of the function timeout in the post of a node: the round trip between
+// the post and the listing with the normative key, and the rejection of a key
+// outside the function list and of a value outside the valid range, without
+// changing the store.
 //
-// Gate test-audit: protege o fio de ingestão (única fonte do prazo rígido).
-// Regressão crível: campo ignorado no registerNodeRequest (anúncio perdido)
-// ou validação não ligada (teto degenerado persistido). Espelha os testes de
-// max_instances sem duplicá-los (chave e regra distintas).
+// The wire of the ingestion is protected, since it is the single source of the
+// hard deadline. The credible regressions are a field ignored by the request of
+// the registration, which loses the announcement, and a validation that is not
+// connected, which persists a degenerate ceiling. It mirrors the tests of the
+// maximum of instances without duplicating them, since the key and the rule are
+// distinct.
 func TestRegisterTimeoutRoundTrip(t *testing.T) {
 	srv, token, _, _ := newTestServerEnv(t)
 	h := srv.Handler()

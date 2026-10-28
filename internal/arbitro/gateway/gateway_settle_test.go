@@ -1,15 +1,14 @@
 package gateway
 
-// Testes da liquidação (adendo 2026-09-30, Passo 4.5): T4b — dupla fonte
-// (assentamento da espera + late report do nó) grava 1x nas duas ordens, com
-// supersede do orcamento_excedido e lateDropped no perdedor.
+// Tests of the settlement: the dual source, which is the settlement of the wait
+// plus the late report of the node, records once in both orders, with the
+// supersede of the exceeded budget and with the dropped counter in the loser.
 //
-// Gate test-audit: protegem o dedup COMPARTILHADO (contrato novo do Passo
-// 4.5) — sem eles, uma regressão no claim/publish duplicaria a Entry
-// (sucesso contado 2x no p95/Count). Regressão crível: dedup separado por
-// fonte ou supersede perdido. Os testes de late legados cobrem só o lado do
-// fio (sem disputa). Sem seam novo (recordAttempt/settlePending/RecordLate
-// reais + History em memória).
+// They protect the shared deduplication, since without it a regression in the
+// claim or in the publish would duplicate the entry and count a success twice in
+// the percentile and in the count. The credible regressions are a deduplication
+// separated by source and a lost supersede. The legacy tests of the late report
+// cover only the side of the wire, without the dispute.
 import (
 	"fmt"
 	"testing"
@@ -48,7 +47,7 @@ func settleFixture(t *testing.T, reqID string) (*Gateway, nodes.Node, time.Time,
 	gw.SetInvocationLog(l)
 	gw.RegisterLateGroup(reqID, "fn", &selection.SLO{MaxLatencyMS: 100})
 
-	// Armamento: o orcamento_excedido síncrono (registrável → liveIdx).
+	// Arming: the synchronous exceeded budget is recordable and goes to the live index.
 	sc := history.ScenarioContext{LoadBucket: history.BucketUnknown}
 	gw.recordAttempt(node, 100*time.Millisecond,
 		fmt.Errorf("%w contra %q (fatia esgotada)", ErrAttemptBudgetExceeded, node.NodeID),
@@ -79,7 +78,7 @@ func settleRep(reqID string, now time.Time) LateReport {
 	}
 }
 
-// primarySuccessStats conta sucessos/saturação na chave primária do attempt.
+// primarySuccessStats counts the successes and the saturation in the primary key of the attempt.
 func primarySuccessStats(t *testing.T, gw *Gateway, now time.Time) (count int, saturation int) {
 	t.Helper()
 	key := history.SegmentKey("fn", "n1", history.ScenarioContext{LoadBucket: history.BucketUnknown})
@@ -90,7 +89,7 @@ func primarySuccessStats(t *testing.T, gw *Gateway, now time.Time) (count int, s
 	return fs.Count, fs.Saturation
 }
 
-// Ordem A→B: assenta primeiro, late report depois — late cai no dedup.
+// Order settlement then report: the late report falls into the deduplication.
 func TestSettleThenLateDedups(t *testing.T) {
 	gw, _, now, logPath, pa, out := settleFixture(t, "req-a")
 	kind, _, _ := gw.settlePending(pa, out, true)
@@ -124,8 +123,8 @@ func TestSettleThenLateDedups(t *testing.T) {
 	}
 }
 
-// Ordem B→A: late report primeiro, assentamento depois — o settle perde o
-// dedup (sem regravar) mas o sucesso ainda vence.
+// Order report then settlement: the settlement loses the deduplication and does
+// not record again, but the success still wins.
 func TestLateThenSettleDedups(t *testing.T) {
 	gw, _, now, logPath, pa, out := settleFixture(t, "req-b")
 	applied, err := gw.RecordLate(settleRep("req-b", now))

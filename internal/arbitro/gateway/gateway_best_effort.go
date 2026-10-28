@@ -45,7 +45,7 @@ import (
 
 // pendingOutcome is the outcome of a single asynchronous attempt, produced
 // by the goroutine and consumed by the loop inside the slice or by the
-// waiting phase. It is written once before the channel is closed and read
+// waiting stage. It is written once before the channel is closed and read
 // afterwards, which establishes the ordering.
 type pendingOutcome struct {
 	// The response holds when there is an HTTP answer, and the transport
@@ -72,7 +72,7 @@ type pendingOutcome struct {
 // expires, settled by the waiting stage and discarded by the drain.
 type pendingAttempt struct {
 	target          nodes.Node
-	function        string // pedida (chave do gauge, como no Inc)
+	function        string // the requested function, which is the key of the meter as in the increase
 	concrete        string
 	group           string
 	slo             *selection.SLO
@@ -143,7 +143,7 @@ type pendencySet struct {
 	mu      sync.Mutex
 	armed   []*pendingAttempt
 	settled chan *pendingAttempt
-	max     int // teto de pendências = maxRaceFanout (D7)
+	max     int // ceiling of pending reports, which is the fan-out of the race
 }
 
 func newPendencySet(queueLen, maxFanout int) *pendencySet {
@@ -346,7 +346,7 @@ func (g *Gateway) dispatchAsyncAttempt(w http.ResponseWriter, req InvocationRequ
 			case <-pa.done:
 			case <-sh.ctx.Done():
 				pa.cancelAttempt()
-				<-pa.done // net/http honra o ctx: retorna prompto
+				<-pa.done // the HTTP stack honors the context and returns promptly
 			case <-sh.clientCtx.Done():
 				// The callback already cancelled it, so the cancelled
 				// outcome is confirmed.
@@ -363,7 +363,7 @@ func (g *Gateway) dispatchAsyncAttempt(w http.ResponseWriter, req InvocationRequ
 // settled channel of the pending reports. An armed report that concludes
 // during the slice of the current attempt is delivered immediately, since
 // the first successful answer wins, instead of waiting for the queue to
-// drain in the waiting phase.
+// drain in the waiting stage.
 func (g *Gateway) dispatchAsyncObserved(w http.ResponseWriter, req InvocationRequest, sh gatewayDispatchShared, target nodes.Node, i int, concrete string, translated bool, pa *pendingAttempt, slice time.Duration) (failure gatewayFailure, responded bool) {
 	wait := slice
 	if wait < 0 {
@@ -397,7 +397,7 @@ func (g *Gateway) dispatchAsyncObserved(w http.ResponseWriter, req InvocationReq
 			other.cancelAttempt()
 			if !out.hasResponse && out.ctxErr != nil && out.ctxErr != context.DeadlineExceeded {
 				// Our own cancellation records nothing, as in the waiting
-				// phase, and the current attempt keeps waiting.
+				// stage, and the current attempt keeps waiting.
 				other.settleDec()
 				continue
 			}
@@ -413,7 +413,7 @@ func (g *Gateway) dispatchAsyncObserved(w http.ResponseWriter, req InvocationReq
 				continue
 			}
 			// The armed attempt won: the late delivery happens immediately,
-			// with the same wire as the waiting phase, and the current
+			// with the same wire as the waiting stage, and the current
 			// attempt becomes an adopted orphan.
 			w.Header().Set(contentTypeHeader, applicationJSON)
 			w.Header().Set("X-Faas-Late", "true")
@@ -442,7 +442,7 @@ func (g *Gateway) dispatchAsyncObserved(w http.ResponseWriter, req InvocationReq
 				case <-pa.done:
 				case <-sh.ctx.Done():
 					pa.cancelAttempt()
-					<-pa.done // net/http honra o ctx: retorna prompto
+					<-pa.done // the HTTP stack honors the context and returns promptly
 				case <-sh.clientCtx.Done():
 					<-pa.done
 				}
@@ -677,7 +677,7 @@ func (g *Gateway) settlePending(pa *pendingAttempt, out pendingOutcome, delivere
 	}
 	won := kind == attemptSuccess || kind == attemptDowngrade
 	// The delivered flag is false when the outcome is settled outside
-	// the waiting phase, in the drain that runs after the answer: the
+	// the waiting stage, in the drain that runs after the answer: the
 	// attempt won in the node but did not deliver.
 	lateDelivered := won && delivered
 	caps := capacityOfMetrics(metrics)
@@ -706,7 +706,7 @@ func boolHeader(b bool) string {
 	return "false"
 }
 
-// launchCloudRace starts the cloud in a race with the waiting phase. It
+// launchCloudRace starts the cloud in a race with the waiting stage. It
 // leaves at the same instant the queue is exhausted, with a deadline at
 // the hard deadline, and the context of the handler is not extended. It
 // returns no values without a configured fallback and the caller goes on
@@ -737,7 +737,7 @@ func cloudRaceFailure(err error, retryable bool) gatewayFailure {
 	return gatewayFailure{httpStatus: http.StatusBadGateway, code: "CLOUD_FALLBACK_FAILED", msg: fmt.Sprintf("fallback de nuvem falhou: %v", err), retryable: retryable}
 }
 
-// hardDeadline computes the hard deadline of the waiting phase: the
+// hardDeadline computes the hard deadline of the waiting stage: the
 // maximum between the overall budget and the natural end of every armed
 // pending report, which is the start of the attempt plus the ceiling. It
 // is never smaller than the budget of the objective and never smaller
@@ -752,7 +752,7 @@ func hardDeadline(overall time.Duration, start time.Time, armed []*pendingAttemp
 	return hard
 }
 
-// waitPendencies is the waiting phase. Once the queue is exhausted
+// waitPendencies is the waiting stage. Once the queue is exhausted
 // without an answer, it waits for the armed pending reports until the hard
 // deadline. The first success wins, including a downgrade, and answers 200
 // with the body, while a non-success settles the real entry and the wait
@@ -796,7 +796,7 @@ func (g *Gateway) waitPendencies(w http.ResponseWriter, req InvocationRequest, s
 		select {
 		case pa := <-pend.settled:
 			if pa == nil || !pa.armed.Load() {
-				continue // desfecho já consumido no laço (nunca armado)
+				continue // the outcome was already consumed by the loop and was never armed
 			}
 			pa.concluded.Store(true)
 			out := pa.outcome

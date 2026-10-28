@@ -67,22 +67,6 @@ func TestRace(t *testing.T) {
 	}
 }
 
-// (TestRaceAll401 e TestRaceRemainingBudget removidos.
-//
-// TestRaceAll401 afirmava "single 401, no cloud fallback", mas o gateway era
-// construido SEM RemoteExecutor -- "no cloud fallback" era verdade por
-// construcao, nao exercitada -- e o contador de tentativas que declarava
-// nunca era lido. O dono real do fail-fast 401 e TestGateway_401PassThrough
-// (2 nos, attempts != 1 falha, Authorization verbatim, code UNAUTHORIZED,
-// retryable=false), reforcado por TestGateway_Category401NoFailover e
-// TestGateway_CatTokenUnknownStaysVerbatim.
-//
-// TestRaceRemainingBudget provava "orcamento esgotado => nuvem nao chamada"
-// via race de wall-clock (no dorme 2s, budget 100ms) -- a fonte mais
-// provavel de flake do package. Os dois donos deterministicos (deadline pai
-// expirado, sem sleep) sao TestGatewayCloudPort_BudgetExpired e
-// TestGateway_EmptyQueueCloudBudgetExpired.
-
 func newTestRemoteExecutor(t *testing.T, url string) RemoteExecutor {
 	t.Helper()
 	dir := t.TempDir()

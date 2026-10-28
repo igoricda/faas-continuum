@@ -86,9 +86,9 @@ func TestSelectSkipsExhausted(t *testing.T) {
 	now := time.Now()
 	free := telemetry.FunctionCapacity{MaxInstances: 1, InstancesAvailable: 1}
 
-	// RiskSelector (canônico, ADR-0012): o estágio de capacidade é o mesmo
-	// do QueueSelector e roda antes da previsão; com learner frio os nós
-	// sobreviventes saem por bootstrap (probation).
+	// In the canonical risk selector the capacity stage is the same as in the queue
+	// selector and runs before the prediction, so with a cold learner the surviving
+	// nodes leave through the bootstrap, in the probation.
 	newSelector := func(mon *monitor.Monitor, clock func() time.Time) *RiskSelector {
 		return &RiskSelector{
 			Base:             QueueSelector{Mon: mon, Cfg: defaultLimits},
@@ -142,17 +142,16 @@ func TestSelectSkipsExhausted(t *testing.T) {
 	})
 
 	t.Run("skips produce no recordAttempt and consume no fanout", func(t *testing.T) {
-		// Prova no nível do Select + contrato do gateway (sem teste
-		// cross-package para não tocar o gateway): o gateway itera a
-		// fila devolvida pelo Select (gateway_handle.go:210, uma
-		// recordAttempt por nó TENTADO) e o teto maxRaceFanout fatia a
-		// mesma fila (gateway_handle.go:157-159). Pulos acontecem no
-		// Select, antes da fila existir — B nunca entra na fila, logo
-		// nunca gera recordAttempt (nem linha no History/invLog) e
-		// nunca consome slot de fanout, que conta tentativas, não
-		// pulos. Fila vazia => NO_NODE_AVAILABLE (gateway_handle.go:149)
-		// nunca dispara aqui: fail-open garante fila não-vazia, então
-		// todos-esgotados tenta e recebe 503 NODE_OVERLOADED do nó.
+		// The proof at the level of the selection, together with the contract of the
+		// gateway: the gateway iterates the queue returned by the selection and
+		// records one attempt per node that it tries, while the fan-out ceiling slices
+		// the same queue. The skips happen in the selection, before the queue exists,
+		// so a skipped node never enters the queue, never generates a recorded
+		// attempt and never consumes a slot of the fan-out, which counts attempts and
+		// not skips. An empty queue would answer that no node is available, and that
+		// never happens here: the fail-open guarantees a non-empty queue, so a case
+		// where every node is exhausted still tries and receives the overload
+		// rejection from the node.
 		mon := monitor.NewMonitor()
 		mon.UpdateCapacity("A", "sleep", free, now)
 		mon.MarkExhausted("B", "sleep", now)

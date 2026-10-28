@@ -1,5 +1,5 @@
-// Testes da correção G1 (SELETOR-V2 §8.1): observar as pendências
-// armadas durante o laço, atrás de -gateway-observe-armed.
+// Tests of the observation of the armed pending reports during the loop, behind
+// the flag of the gateway.
 package gateway
 
 import (
@@ -18,9 +18,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// fixedQueueSelector devolve a fila fixa: ordem determinística sem
-// depender do ranking (só Select; sem portas de previsão => fatia de
-// metade do restante).
+// fixedQueueSelector returns a fixed queue, with a deterministic order that does
+// not depend on the ranking. It only implements the selection, without the
+// prediction ports, so the slice is half of the remaining budget.
 type fixedQueueSelector struct{ queue []nodes.Node }
 
 func (s fixedQueueSelector) Select([]nodes.Node, string, *selection.SLO) []nodes.Node {
@@ -114,9 +114,11 @@ func waitForGaugeZero(t *testing.T, ig *InflightGauge, fn string, ids []string, 
 	}
 }
 
-// TestRace_ArmedWinsWhileNextInSlice: A leva 1,2s com fatia de 1s; B leva
-// 3s com fatia folgada. O cliente recebe A em ≈1,2s com X-Faas-Late;
-// B é assentado pelo drain; duas entradas no History; gauge zerado.
+// TestRace_ArmedWinsWhileNextInSlice: the first node takes one and two tenths of
+// a second with a slice of one, and the second takes three with a loose slice. The
+// client receives the first in about one and two tenths, with the late header, the
+// second is settled by the drain, the history receives two entries and the meter
+// returns to zero.
 func TestRace_ArmedWinsWhileNextInSlice(t *testing.T) {
 	srvA := statusServer(t, 1200*time.Millisecond, 200, `{"result":"A"}`)
 	srvB := statusServer(t, 3000*time.Millisecond, 200, `{"result":"B"}`)
@@ -178,8 +180,9 @@ func TestRace_ArmedWinsWhileNextInSlice(t *testing.T) {
 	}
 }
 
-// TestRace_ArmedWinsLegacyOff: mesmo cenário com a flag desligada —
-// ainda entrega A (waitPendencies), mas só após a fatia de B (~2s).
+// TestRace_ArmedWinsLegacyOff: the same scenario with the flag disabled still
+// delivers the first node, through the wait for the pending reports, but only
+// after the slice of the second, of about two seconds.
 func TestRace_ArmedWinsLegacyOff(t *testing.T) {
 	srvA := statusServer(t, 1200*time.Millisecond, 200, `{"result":"A"}`)
 	srvB := statusServer(t, 3000*time.Millisecond, 200, `{"result":"B"}`)
@@ -207,8 +210,8 @@ func TestRace_ArmedWinsLegacyOff(t *testing.T) {
 	waitForGaugeZero(t, ig, "fn", []string{"nA", "nB"}, 10*time.Second)
 }
 
-// TestRace_CurrentWinsUnchanged: a corrente conclui primeiro —
-// comportamento idêntico ao atual (golden), com e sem a flag.
+// TestRace_CurrentWinsUnchanged: the current attempt concludes first, with a
+// behavior identical to the previous one, with and without the flag.
 func TestRace_CurrentWinsUnchanged(t *testing.T) {
 	for _, observe := range []bool{false, true} {
 		srvA := statusServer(t, 50*time.Millisecond, 200, `{"result":"A"}`)
@@ -242,10 +245,11 @@ func TestRace_CurrentWinsUnchanged(t *testing.T) {
 	}
 }
 
-// TestRace_ArmedFailsThenCurrentWins: a armada falha durante a fatia da
-// corrente — o G1 assenta a falha no laço e a corrente vence. Ordem das
-// linhas com G1: [armA, falhaA, vitóriaB]; sem G1 a falha assenta no
-// drain, depois da vitória.
+// TestRace_ArmedFailsThenCurrentWins: the armed report fails during the slice of
+// the current attempt, so the observation settles the failure inside the loop and
+// the current attempt wins. The order of the lines with the observation is the
+// arming, the failure and the victory, and without it the failure is settled in
+// the drain, after the victory.
 func TestRace_ArmedFailsThenCurrentWins(t *testing.T) {
 	for _, tc := range []struct {
 		observe bool
@@ -297,8 +301,8 @@ func TestRace_ArmedFailsThenCurrentWins(t *testing.T) {
 	}
 }
 
-// TestRace_NoGaugeLeakNoGoroutineLeak: N invokes com corrida — gauge
-// zerado e sem goroutine vazada.
+// TestRace_NoGaugeLeakNoGoroutineLeak runs several invocations with a race and
+// checks that the meter returns to zero and that no goroutine leaks.
 func TestRace_NoGaugeLeakNoGoroutineLeak(t *testing.T) {
 	srvA := statusServer(t, 300*time.Millisecond, 200, `{"result":"A"}`)
 	srvB := statusServer(t, 100*time.Millisecond, 200, `{"result":"B"}`)
@@ -331,9 +335,9 @@ func TestRace_NoGaugeLeakNoGoroutineLeak(t *testing.T) {
 	}
 }
 
-// TestWaitPendencies_RemainingExcludesConcluded: a espera conta só as
-// armadas não concluídas — a consumida no laço (G1) não prende a espera
-// até o prazo rígido.
+// TestWaitPendencies_RemainingExcludesConcluded: the wait counts only the armed
+// reports that did not conclude, so one consumed inside the loop does not hold
+// the wait until the hard deadline.
 func TestWaitPendencies_RemainingExcludesConcluded(t *testing.T) {
 	now := time.Now()
 	h, err := history.NewHistory("", 500)
@@ -357,7 +361,7 @@ func TestWaitPendencies_RemainingExcludesConcluded(t *testing.T) {
 	gw.SetInvocationLog(l)
 
 	pend := newPendencySet(2, 3)
-	// PA1: consumida no laço (concluída, mensagem já retirada).
+	// The first report is consumed inside the loop, concluded, with the message already taken.
 	done1 := make(chan struct{})
 	close(done1)
 	pa1 := &pendingAttempt{

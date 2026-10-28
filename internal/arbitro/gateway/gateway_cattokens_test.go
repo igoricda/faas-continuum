@@ -1,9 +1,10 @@
 package gateway
 
-// Tradução de token por categoria (cattokens): com token de categoria
-// válido, cada nó recebe o token que espera no concreto (nunca o do
-// cliente); 401 traduzido continua a fila (mapeamento obsoleto é culpa
-// do operador); verbatim legado segue sem failover em 401.
+// Translation of the token per category: with a valid category token, each node
+// receives the token it expects in the concrete variant and never the token of
+// the client. An unauthorized answer after the translation continues the queue,
+// since a stale mapping is the fault of the operator, while the legacy verbatim
+// path does not fail over on an unauthorized answer.
 
 import (
 	"net/http"
@@ -92,7 +93,7 @@ func catTokenTestGateway(ns *nodes.NodeStore, h *history.History, cs *cattokens.
 	})
 }
 
-// Cada nó recebe o próprio token downstream, nunca o token de categoria.
+// Each node receives its own downstream token, and never the token of the category.
 func TestGateway_CatTokenTranslatedPerNode(t *testing.T) {
 	var bordaAuth, nevoaAuth string
 	ns, cleanup, cs, plain := catTokenTestPair(t, &bordaAuth, &nevoaAuth, http.StatusOK, http.StatusOK)
@@ -110,8 +111,8 @@ func TestGateway_CatTokenTranslatedPerNode(t *testing.T) {
 	}
 }
 
-// 401 com token traduzido continua a fila (failover); o segundo nó recebe
-// o SEU token e atende.
+// An unauthorized answer with a translated token continues the queue, and the
+// second node receives its own token and serves.
 func TestGateway_CatTokenTranslated401Failover(t *testing.T) {
 	var bordaAuth, nevoaAuth string
 	ns, cleanup, cs, plain := catTokenTestPair(t, &bordaAuth, &nevoaAuth, http.StatusUnauthorized, http.StatusOK)
@@ -129,8 +130,9 @@ func TestGateway_CatTokenTranslated401Failover(t *testing.T) {
 	}
 }
 
-// Token desconhecido (nem categoria) segue verbatim legado: o nó o
-// rejeita com o próprio 401 e não há tradução.
+// An unknown token, which is not even a category, follows the legacy verbatim
+// path, so the node rejects it with its own unauthorized answer and no
+// translation happens.
 func TestGateway_CatTokenUnknownStaysVerbatim(t *testing.T) {
 	var bordaAuth string
 	var nevoaAuth string

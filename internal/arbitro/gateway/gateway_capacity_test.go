@@ -81,10 +81,11 @@ func TestGateway503Capacity(t *testing.T) {
 	}{
 		{"pool_exhausted", `{"code":"POOL_EXHAUSTED","message":"pool busy"}`, true},
 		{"queue_full", `{"code":"QUEUE_FULL","message":"queue full"}`, true},
-		// Emenda 2026-09-24: o 503 carrega semântica do STATUS, não do corpo
-		// — truncado/vazio/não-JSON/code desconhecido também treinam o
-		// History como FALHA SEM LATÊNCIA (Total/rate; p95/Count intactos);
-		// o contrato cliente segue NODE_OVERLOADED retryable.
+		// The rejection carries the semantics of the status and not of the body, so
+		// a truncated, empty or non-JSON body or an unknown code also trains the
+		// history as a failure without latency, in the total and in the rate, with
+		// the percentile and the count intact, while the contract of the client
+		// stays the retryable overload.
 		{"unknown_code", `{"code":"FUTURE_CODE"}`, true},
 		{"empty_body", ``, true},
 		{"garbage_body", `not-json{{{`, true},
@@ -125,9 +126,9 @@ func TestGateway503Capacity(t *testing.T) {
 				if len(h.Keys()) != 2 {
 					t.Fatalf("history tem %d chaves, esperado 2 (primária + agregada)", len(h.Keys()))
 				}
-				// Rejeição de capacidade é saturação: fica gravada, sem
-				// latência, fora do p95 e FORA da taxa de serviço — o veto
-				// por taxa não pode punir o nó por recusar (D1).
+				// A capacity rejection is a saturation, so it is recorded without
+				// latency, outside the percentile and outside the service rate, since
+				// the veto by rate cannot punish the node for refusing.
 				count, p95, total, rate, ok := h.Stats(h.Keys()[0])
 				if ok || count != 0 || p95 != 0 || total != 0 {
 					t.Fatalf("stats=(count=%d p95=%d total=%d ok=%v), esperado sem taxa e sem latência", count, p95, total, ok)

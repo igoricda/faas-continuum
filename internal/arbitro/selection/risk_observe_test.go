@@ -1,4 +1,4 @@
-// Mapeamento Entry -> Obs e replay no boot (Fase 2, SELETOR-V2 §6.1/§9).
+// Mapping of a history entry to an observation and the replay at startup.
 package selection
 
 import (
@@ -24,7 +24,7 @@ func riskTestEntry(outcome string) history.Entry {
 
 // TestRiskObsFromEntry cobre cada linha da tabela 6.1.
 func TestRiskObsFromEntry(t *testing.T) {
-	// Sucesso warm com espera conhecida: y líquido, m = min(k, c).
+	// A warm success with a known wait gives the net latency, and the sample size is the minimum between the requests in flight and the capacity.
 	o, ok := RiskObsFromEntry(riskTestEntry(history.OutcomeSucesso))
 	if !ok || o.Outcome != learn.OutcomeSuccess || !o.UseRegr {
 		t.Fatalf("warm: %+v ok=%v, want success+regr", o, ok)
@@ -40,7 +40,7 @@ func TestRiskObsFromEntry(t *testing.T) {
 	if !ok || o.Outcome != learn.OutcomeSuccess || o.UseRegr {
 		t.Fatalf("sem-espera-desconhecida: %+v ok=%v, want success sem regr", o, ok)
 	}
-	// Sem AcquireWait + Inflight acima das instâncias: Beta-only.
+	// Without the acquisition wait and with the requests in flight above the instances, only the reliability model is updated.
 	e = riskTestEntry(history.OutcomeSucesso)
 	e.AcquireWaitMS = 0
 	e.Inflight = 6
@@ -63,14 +63,14 @@ func TestRiskObsFromEntry(t *testing.T) {
 	if !ok || !o.Cold || o.LatencyMS != 810 {
 		t.Fatalf("cold: %+v, want cold lat=810", o)
 	}
-	// Falha/timeout: só Beta.
+	// A failure or a timeout updates only the reliability model.
 	for _, out := range []string{history.OutcomeFalha, history.OutcomeTimeout} {
 		o, ok = RiskObsFromEntry(riskTestEntry(out))
 		if !ok || o.Outcome != learn.OutcomeFailure {
 			t.Fatalf("%s: %+v ok=%v, want failure", out, o, ok)
 		}
 	}
-	// Ignorados: decisão do árbitro, saturação ou desconhecido.
+	// The decision of the arbiter, the saturation and the unknown outcome are ignored.
 	for _, out := range []string{
 		history.OutcomeOrcamentoExcedido,
 		history.OutcomeRejeicaoCapacidade,
@@ -83,9 +83,9 @@ func TestRiskObsFromEntry(t *testing.T) {
 	}
 }
 
-// TestReplayRiskHistoryRebuilds: reiniciar reconstrói o learner do
-// histórico persistido — 5 sucessos (com fan-out de camada, que NÃO
-// pode contar 2x) tiram o modelo de probation.
+// TestReplayRiskHistoryRebuilds covers the restart: the learner is rebuilt from
+// the persisted history, so five successes, with the fan-out by layer that must
+// not count twice, take the model out of the probation.
 func TestReplayRiskHistoryRebuilds(t *testing.T) {
 	h, err := history.NewHistory("", 100)
 	if err != nil {

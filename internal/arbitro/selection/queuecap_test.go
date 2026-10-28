@@ -8,9 +8,10 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// seedQueueFaixa grava a evidência de UMA faixa de k do par (group, node):
-// successes sucessos warm, failures timeouts e saturations cortes/recusas
-// (fora da taxa de entrega). Helper de teste do teto aprendido.
+// seedQueueFaixa records the evidence of a single band of the number of
+// requests in flight for the pair of group and node: the successes are warm
+// deliveries, the failures are timeouts and the saturations are cuts and
+// refusals, which stay outside the delivery rate.
 func seedQueueFaixa(t *testing.T, h *history.History, group, nodeID string, now time.Time, k, successes, failures, saturations int) {
 	t.Helper()
 	for i := 0; i < successes; i++ {
@@ -40,14 +41,14 @@ func seedQueueEntrySel(t *testing.T, h *history.History, group, nodeID string, t
 	}
 }
 
-// TestPredictMaxQueueK fixa a política do teto de fila aprendido: o PRIMEIRO
-// vão de k com evidência suficiente (MinClassSamples) e maioria de falhas
-// (VetoByRate sobre a taxa de Laplace) define o teto KMin−1; vãos sem
-// evidência não provam limite; saturação NÃO entra na taxa (doutrina D1);
-// sem vão ruim o seletor não inventa teto (ok=false). É este contrato que
-// calibra o teto do portão — sem ele, o limite viraria um número fixo.
-// A lógica é a função compartilhada maxQueueKForNode (queuecap.go), que o
-// RiskSelector canônico expõe pela porta PredictMaxQueueK.
+// TestPredictMaxQueueK fixes the policy of the learned queue ceiling: the first
+// band with enough evidence and a majority of failures, judged by the veto over
+// the smoothed rate, defines the ceiling one below the band; a band without
+// evidence does not prove a limit, saturation does not enter the rate, and
+// without a bad band the selector invents no ceiling. This contract calibrates
+// the ceiling of the gate, since without it the limit would become a fixed
+// number. The logic is the shared function that the canonical risk selector
+// exposes through the prediction port.
 func TestPredictMaxQueueK(t *testing.T) {
 	now := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
 	node := nodes.Node{NodeID: "n1", Layer: nodes.LayerBorda, Host: "h1"}
@@ -77,7 +78,7 @@ func TestPredictMaxQueueK(t *testing.T) {
 		h := newHist(t)
 		seedQueueFaixa(t, h, "detect", "n1", now, 1, 10, 0, 0)
 		seedQueueFaixa(t, h, "detect", "n1", now, 2, 5, 1, 0)
-		seedQueueFaixa(t, h, "detect", "n1", now, 4, 6, 0, 20) // saturação não é falha de entrega
+		seedQueueFaixa(t, h, "detect", "n1", now, 4, 6, 0, 20) // a saturation is not a delivery failure
 		seedQueueFaixa(t, h, "detect", "n1", now, 30, 9, 1, 0)
 		if k, ok := sel(h); ok || k != 0 {
 			t.Fatalf("PredictMaxQueueK = (%d, %v); want (0, false)", k, ok)

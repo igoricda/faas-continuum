@@ -92,9 +92,9 @@ type Collector struct {
 
 	mu             sync.Mutex
 	lastCPU        usage.Sample
-	lastTime       ntime.Time // zero => primeira coleta ainda não aconteceu (8 bytes vs 24)
+	lastTime       ntime.Time // zero means the first collection did not happen yet (8 bytes against 24)
 	lastEnergy     energy.Sample
-	lastEnergyTime ntime.Time // zero => primeira amostra de energia ainda não primada
+	lastEnergyTime ntime.Time // zero means the first energy sample is not primed yet
 
 	// capMu guards the capacity snapshot, a callback installed by the
 	// component that owns the registry and the pool. The collector never

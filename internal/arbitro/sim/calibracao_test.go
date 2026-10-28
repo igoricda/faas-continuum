@@ -6,9 +6,9 @@ import (
 	"time"
 )
 
-// TestColdDefaults trava a faixa dos defaults de cold sem amostra real
-// (o bug antigo devolvia 5 ms–3 s para xp4/lpr e 19 ms–19 s para xp4/ocr,
-// não as faixas documentadas) e a precedência das amostras reais.
+// TestColdDefaults pins the band of the cold defaults without a real sample,
+// since the old bug returned ranges that were not the documented ones, and the
+// precedence of the real samples.
 func TestColdDefaults(t *testing.T) {
 	cal := &Calibracao{PorNo: map[string]map[string]*Amostras{}}
 	rng := rand.New(rand.NewSource(7))
@@ -24,7 +24,7 @@ func TestColdDefaults(t *testing.T) {
 		}
 	}
 
-	// Amostra real do par vence o default (valor exato, sem faixa).
+	// A real sample of the pair wins over the default, with the exact value and without a band.
 	cal.PorNo["xp4"] = map[string]*Amostras{
 		"ocr": {Fast: map[string][]int64{}, Censuradas: map[string][]int64{}, Cold: []int64{20541}},
 	}

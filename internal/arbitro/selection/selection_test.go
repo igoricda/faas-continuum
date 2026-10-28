@@ -30,12 +30,12 @@ func TestOverloaded(t *testing.T) {
 		ok   bool
 		want bool
 	}{
-		// ok == false sempre false, independente dos valores.
+		// An unknown node is never overloaded, whatever the values.
 		{name: "ok false cpu alto => false", pkg: telemetry.Package{CPUUsagePct: 100, MemoryUsagePct: 100, CPUPressure: psiPtr(100), MemoryPressure: psiPtr(100)}, ok: false, want: false},
 		{name: "ok false psi alto => false", pkg: telemetry.Package{CPUPressure: psiPtr(99), MemoryPressure: psiPtr(99)}, ok: false, want: false},
 		{name: "ok false vazio => false", pkg: telemetry.Package{}, ok: false, want: false},
 
-		// Ausência total de pressão (nil) com valores abaixo do limite => false.
+		// A total absence of pressure, with values below the ceiling, gives false.
 		{name: "todos nil abaixo limite => false", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10}, ok: true, want: false},
 
 		// CPU isolado
@@ -58,15 +58,16 @@ func TestOverloaded(t *testing.T) {
 		{name: "psi mem fronteira == limite => false", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, MemoryPressure: psiPtr(25)}, ok: true, want: false},
 		{name: "psi mem isolado acima => true", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, MemoryPressure: psiPtr(25.1)}, ok: true, want: true},
 
-		// Compatibilidade: um nil outro presente
+		// Compatibility: one pressure absent and the other present.
 		{name: "compat CPUPressure nil MemoryPressure acima => true", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, MemoryPressure: psiPtr(30)}, ok: true, want: true},
 		{name: "compat MemoryPressure nil CPUPressure acima => true", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, CPUPressure: psiPtr(30)}, ok: true, want: true},
 		{name: "compat CPUPressure nil MemoryPressure abaixo => false", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, MemoryPressure: psiPtr(10)}, ok: true, want: false},
 		{name: "compat MemoryPressure nil CPUPressure abaixo => false", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, CPUPressure: psiPtr(10)}, ok: true, want: false},
 		{name: "compat ambos nil com cpu/mem ok => false", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, CPUPressure: nil, MemoryPressure: nil}, ok: true, want: false},
 
-		// PSI nil ignorado mesmo quando o outro campo seria sobrecarga se presente:
-		// se ambos nil e cpu/mem ok, não sobrecarrega — já coberto acima.
+		// A nil pressure is ignored even when the other field alone would be an
+		// overload, and with both absent and the usage below the ceilings the node
+		// is not overloaded, which is already covered above.
 
 		// Combinados
 		{name: "combinado cpu+mem acima => true", pkg: telemetry.Package{CPUUsagePct: 90, MemoryUsagePct: 95}, ok: true, want: true},
@@ -74,7 +75,7 @@ func TestOverloaded(t *testing.T) {
 		{name: "combinado cpu ok psi cpu acima => true", pkg: telemetry.Package{CPUUsagePct: 10, MemoryUsagePct: 10, CPUPressure: psiPtr(30)}, ok: true, want: true},
 		{name: "combinado todos acima => true", pkg: telemetry.Package{CPUUsagePct: 90, MemoryUsagePct: 95, CPUPressure: psiPtr(30), MemoryPressure: psiPtr(30)}, ok: true, want: true},
 
-		// Fronteira estrita adicional: exatamente limite em todos => false
+		// The strict boundary: exactly at the ceiling on every axis gives false.
 		{name: "todos fronteira == limite => false", pkg: telemetry.Package{CPUUsagePct: 85, MemoryUsagePct: 90, CPUPressure: psiPtr(25), MemoryPressure: psiPtr(25)}, ok: true, want: false},
 	}
 	for _, tc := range cases {
@@ -88,12 +89,13 @@ func TestOverloaded(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// HardLimit (critério de bootstrap do segmento imaturo)
+// Hard limit, which is the bootstrap criterion of an immature segment
 // ---------------------------------------------------------------------------
 
-// Desde 2026-09-28 não há teto por camada: o critério de bootstrap é SEMPRE
-// apto, independente da camada e do SLO. O limite de latência é o `timeout_ms`
-// por função no nó + o orçamento do gateway (ver RankNodes).
+// There is no ceiling per layer: the bootstrap criterion is always eligible,
+// independent of the layer and of the objective. The latency limit is the
+// timeout per function declared by the node plus the budget of the gateway, as
+// applied by the ranking.
 func TestHardLimitAlwaysApt(t *testing.T) {
 	c := LatencyCriterion{}
 	slos := []*SLO{nil, {MaxLatencyMS: 500}, {MaxLatencyMS: 5000}, {MaxLatencyMS: 30000}, {MaxLatencyMS: 999999}}
@@ -121,7 +123,7 @@ func TestRankNodes(t *testing.T) {
 			"nevoa1": {CPUUsagePct: 5},
 			"borda1": {CPUUsagePct: 90}, // cpu maior mas borda vence
 		}
-		// Usar limites altos para não filtrar por sobrecarga no teste de ordenacao
+		// High limits avoid filtering by overload in the ordering test.
 		cfg := LimitsConfig{MaxCPUPct: 100, MaxMemPct: 100, MaxPSIAvg10: 100}
 		got := RankNodes(candidates, latest, nil, cfg)
 		if len(got) != 2 || got[0].NodeID != "borda1" || got[1].NodeID != "nevoa1" {
@@ -197,8 +199,8 @@ func TestRankNodes(t *testing.T) {
 			"nevoa1": {CPUUsagePct: 10},
 			"borda2": {CPUUsagePct: 10},
 		}
-		// SLO 8000 não exclui mais ninguém (2026-09-28): todos passam e a
-		// ordem é só por camada/cpu.
+		// An objective of eight seconds excludes no node, so every node passes and
+		// the order is only by layer and processor usage.
 		slo := &SLO{MaxLatencyMS: 8000}
 		got := RankNodes(candidates, latest, slo, defaultLimits)
 		if len(got) != 3 || got[0].NodeID != "borda1" || got[1].NodeID != "borda2" || got[2].NodeID != "nevoa1" {
@@ -232,10 +234,10 @@ func TestRankNodes(t *testing.T) {
 			{NodeID: "n2", Layer: nodes.LayerNevoa},
 		}
 		latest := map[string]telemetry.Package{
-			"b1": {CPUUsagePct: 10}, // SLO não bloqueia mais a borda
+			"b1": {CPUUsagePct: 10}, // the objective no longer excludes the edge
 			"b2": {CPUUsagePct: 10},
-			"n1": {CPUUsagePct: 95}, // nevoa sobrecarregado => fora
-			"n2": {CPUUsagePct: 10}, // nevoa ok
+			"n1": {CPUUsagePct: 95}, // an overloaded fog is excluded
+			"n2": {CPUUsagePct: 10}, // an idle fog
 		}
 		slo := &SLO{MaxLatencyMS: 8000}
 		got := RankNodes(candidates, latest, slo, defaultLimits)
@@ -314,7 +316,7 @@ func TestRankNodes_Estabilidade(t *testing.T) {
 		t.Fatalf("estabilidade SliceStable want %v got %v", want, ids(got))
 	}
 
-	// Ordem inversa na entrada deve prevalecer quando cpu igual
+	// The reverse order in the input prevails when the processor usage is equal.
 	candidates2 := []nodes.Node{
 		{NodeID: "b2", Layer: nodes.LayerBorda},
 		{NodeID: "b1", Layer: nodes.LayerBorda},
@@ -363,16 +365,15 @@ func equalIDs(got []nodes.Node, want []string) bool {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers compartilhados pelos testes do pacote (QueueSelector, RiskSelector
-// e funções puras). O v1 (SelfLearningSelector) foi aposentado no
-// ADR-0012; os testes de comportamento exclusivo do v1 foram removidos
-// com ele.
+// Helpers shared by the tests of the package, which cover the queue selector,
+// the risk selector and the pure functions. The previous selector was retired,
+// and the tests of the behavior that was exclusive to it were removed with it.
 // ---------------------------------------------------------------------------
 
 func fixedClock(t time.Time) func() time.Time { return func() time.Time { return t } }
 
-// nodeIDs devolve só os IDs (duplicado de gateway_test.nodeIDs de propósito:
-// testes de pacotes distintos não compartilham identificadores).
+// nodeIDs returns only the identifiers, and it is duplicated from the gateway
+// tests on purpose, since tests of different packages do not share identifiers.
 func nodeIDs(ns []nodes.Node) []string {
 	ids := make([]string, len(ns))
 	for i, n := range ns {

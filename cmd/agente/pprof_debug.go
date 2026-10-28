@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-// StartPprof inicia o servidor HTTP do pprof no endereço informado.
+// StartPprof starts the HTTP server of the profiler on the given address.
 // The address must be a 127.0.0.1 or localhost address — 0.0.0.0 is rejected.
 // If addr is empty, pprof is not started.
 func StartPprof(addr string) {

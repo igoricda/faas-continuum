@@ -1,5 +1,6 @@
-// BLR Tier1 conformal calibration — see blr_model.go for overview.
-// Pure stdlib, no locks/I-O (ADR-0007 D32).
+// Conformal calibration of the Bayesian linear regression, which corrects the
+// parametric band. See blr_model.go for the overview. It uses only the
+// standard library, without locks or input and output.
 package history
 
 import (
@@ -8,13 +9,12 @@ import (
 	"time"
 )
 
-// Tier1 calibration minimum (ADR-0007 D32): pooled one-sided normalized
-// conformal correction needs at least blrCalMinSamples newer-half scores —
-// below that the Beta-lottery small-n law applies (a quantile over <30
-// points is a lottery ticket, not a calibration), so q-hat is unavailable
-// and the pure parametric Tier0 band rules. Safety knob, pre-authorized
-// escalation 30 -> 50 -> 100 (more fallback to parametric = closer to
-// pre-Tier1 behavior); shipped value 30 (see calibration audit test).
+// Minimum number of samples for the conformal calibration: the pooled
+// one-sided normalized correction needs at least this many scores from the
+// newer half, since below that a quantile over so few points is not a
+// calibration, so the correction is unavailable and the purely parametric
+// band applies. The value is a safety knob that may only escalate, from 30 to
+// 50 to 100, which increases the fallback to the parametric band.
 const blrCalMinSamples = 30
 
 // blrConformalQ is the split/inductive one-sided normalized conformal

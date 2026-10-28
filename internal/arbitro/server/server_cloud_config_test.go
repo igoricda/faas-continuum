@@ -8,8 +8,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/cloud"
 )
 
-// PUT/GET/DELETE com o formato por função (ADR-0011, item 3): mesmos
-// códigos da rota legada (400 INVALID_CLOUD_CONFIG, 413, 404, 204).
+// The routes of the cloud configuration with the format per function: they
+// return the same status codes as the legacy route, which are the bad request,
+// the too large body, the not found and the no content.
 func TestServer_CloudFallbackPerFunction(t *testing.T) {
 	srv, token, _, _ := newTestServerEnv(t)
 	h := srv.Handler()
@@ -67,7 +68,7 @@ func TestServer_CloudFallbackPerFunction(t *testing.T) {
 	}
 }
 
-// O formato plano legado continua aceito sem migração (ADR-0011, item 5).
+// The legacy flat format is still accepted without a migration.
 func TestServer_CloudFallbackLegacyStillAccepted(t *testing.T) {
 	srv, token, _, _ := newTestServerEnv(t)
 	h := srv.Handler()

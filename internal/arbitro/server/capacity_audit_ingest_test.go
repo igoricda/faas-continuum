@@ -1,9 +1,9 @@
 package server
 
-// Regressões AUD-17 (ingestão validada no canal periódico) e AUD-20
-// (re-registro não herda ocupação esgotada): função desconhecida é
-// descartada, avail acima do teto registrado é limitado, e o Upsert
-// limpa a capacidade sem tocar a telemetria.
+// Regressions of the validated ingestion in the periodic channel and of the
+// re-registration: an unknown function is discarded, an availability above the
+// registered ceiling is limited, and the upsert clears the capacity without
+// touching the telemetry.
 
 import (
 	"net/http"
@@ -48,8 +48,8 @@ func TestTelemetryCapacityUnknownFunctionDiscarded(t *testing.T) {
 	h := srv.Handler()
 	registerAuditedNode(t, h, token)
 
-	// AUD-17: ocupação de "alpr" (não hospedada em n1) é descartada —
-	// antes fundia e causava failover indevido por 30s de TTL.
+	// The occupancy of a function that the node does not host is discarded, since
+	// before it was merged and caused an undue failover for the time to live.
 	postAuditedTelemetry(t, h, token, map[string]telemetry.FunctionCapacity{
 		"alpr": {MaxInstances: 1, InstancesAvailable: 0},
 	})
@@ -63,7 +63,7 @@ func TestTelemetryCapacityClampedToRegisteredCeiling(t *testing.T) {
 	h := srv.Handler()
 	registerAuditedNode(t, h, token)
 
-	// AUD-17: avail=9 acima do teto registrado (2) é limitado ao teto.
+	// An availability of nine, above the registered ceiling of two, is limited to the ceiling.
 	postAuditedTelemetry(t, h, token, map[string]telemetry.FunctionCapacity{
 		"sleep": {MaxInstances: 2, InstancesAvailable: 9},
 	})
@@ -81,8 +81,8 @@ func TestReregisterClearsStaleExhausted(t *testing.T) {
 	h := srv.Handler()
 	registerAuditedNode(t, h, token)
 
-	// Nó marcado como esgotado (rejeição otimista) e re-registrado:
-	// AUD-20 — o nó novo não herda `exhausted` sem ter recebido carga.
+	// A node marked as exhausted by an optimistic rejection and registered again
+	// does not inherit the mark, since it received no load.
 	mon.MarkExhausted("n1", "sleep", time.Now())
 	if _, ok := mon.GetCapacity("n1", "sleep", time.Now()); !ok {
 		t.Fatal("pré-condição: MarkExhausted deveria criar entrada fresca")
@@ -100,7 +100,7 @@ func TestReregisterClearsStaleExhausted(t *testing.T) {
 	if _, ok := mon.GetCapacity("n1", "sleep", time.Now()); ok {
 		t.Fatal("GetCapacity após re-registro = true, esperado false (ocupação herdada limpa)")
 	}
-	// Telemetria segue válida após o re-registro (só capacidade é limpa).
+	// The telemetry stays valid after the re-registration, since only the capacity is cleared.
 	postAuditedTelemetry(t, h, token, map[string]telemetry.FunctionCapacity{
 		"sleep": {MaxInstances: 2, InstancesAvailable: 2},
 	})

@@ -26,15 +26,16 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// defaultLimits espelha selection_test.defaultLimits (mesmos tetos da Sprint 6);
-// duplicado aqui porque testes de pacotes distintos não compartilham identificadores.
+// defaultLimits mirrors the limits of the selection tests, with the same ceilings,
+// and it is duplicated here because tests of different packages do not share
+// identifiers.
 var defaultLimits = selection.LimitsConfig{
 	MaxCPUPct:   85,
 	MaxMemPct:   90,
 	MaxPSIAvg10: 25,
 }
 
-// fixedClock congela o tempo (duplicado de selection_test de propósito).
+// fixedClock freezes the time, and it is duplicated from the selection tests on purpose.
 func fixedClock(t time.Time) func() time.Time { return func() time.Time { return t } }
 
 func hostFromURL(t *testing.T, raw string) string {
@@ -61,13 +62,13 @@ func decodeErrResp(t *testing.T, rec *httptest.ResponseRecorder) ErrorResponse {
 }
 
 func TestGateway_HappyPath(t *testing.T) {
-	// Nó fake que captura o corpo enviado pelo Gateway.
+	// A fake node that captures the body sent by the gateway.
 	var capturedBody []byte
 	var capturedPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedPath = r.URL.Path
 		body, _ := json.Marshal(map[string]any{"ok": true})
-		// Verifica que Gateway encaminhou slo+input
+		// Check that the gateway forwarded the objective and the input.
 		raw, _ := json.Marshal(r.Body)
 		_ = raw
 		b, _ := readAll(r)
@@ -77,10 +78,10 @@ func TestGateway_HappyPath(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Captura verbatim do nó
+	// Verbatim capture of the node.
 	expectedNodeBody := json.RawMessage(`{"result":"hello"}`)
 
-	// Recria server que retorna verbatim body não envolto
+	// Recreate the server so that it returns the body verbatim, without wrapping.
 	srv2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		capturedPath = r.URL.Path
 		b, _ := readAll(r)
@@ -118,7 +119,7 @@ func TestGateway_HappyPath(t *testing.T) {
 	if capturedPath != "/function/myfunc/invoke" {
 		t.Fatalf("path=%q want /function/myfunc/invoke", capturedPath)
 	}
-	// Verifica que input foi encaminhado (slo removido do wire por todo 6).
+	// Check that the input was forwarded, with the objective removed from the wire.
 	var fwd map[string]json.RawMessage
 	if err := json.Unmarshal(capturedBody, &fwd); err != nil {
 		t.Fatalf("forwarded body not json: %v captured=%q", err, string(capturedBody))
@@ -239,8 +240,8 @@ func TestGateway_SLOTimeout(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(`{"function":"fn","slo":{"max_latency_ms":50},"input":{"a":1}}`))
 	rec := httptest.NewRecorder()
 	gw.Handle(rec, req)
-	// Orçamento esgotado no meio da tentativa (AUD-22, adendo ADR-0008
-	// 2026-09-17): árbitro-timeout => 504, não 502 atribuído ao nó.
+	// The budget expires in the middle of the attempt, from an arbiter timeout,
+	// which gives a timed out answer and not a bad gateway attributed to the node.
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status=%d want 504", rec.Code)
 	}
@@ -255,7 +256,7 @@ func TestGateway_SLOTimeout(t *testing.T) {
 
 func TestGateway_EmptyQueue(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
-	// Nenhum nó registrado -> fila vazia
+	// No registered node gives an empty queue.
 	gw := newTestGateway(ns)
 	req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(`{"function":"fn","input":{"a":1}}`))
 	rec := httptest.NewRecorder()
@@ -271,7 +272,7 @@ func TestGateway_EmptyQueue(t *testing.T) {
 		t.Fatalf("retryable false want true")
 	}
 
-	// Também fila vazia por filtro Functions
+	// The queue is also empty because of the filter of functions.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte(`{}`))
@@ -317,8 +318,7 @@ func TestGateway_InvalidBodyNoInput(t *testing.T) {
 
 func TestGateway_Node2xxLargeBody(t *testing.T) {
 	large := bytes.Repeat([]byte("a"), 9*1024*1024)
-	// Wrap as JSON array to make it valid JSON but oversized
-	// Use a JSON string that is 9MiB when encoded; simplest: make a JSON object with a big string field
+	// Wrap the content as a JSON array, which makes it valid JSON and oversized.
 	bigJSON := make([]byte, 0, 9*1024*1024+20)
 	bigJSON = append(bigJSON, `{"data":"`...)
 	bigJSON = append(bigJSON, large...)
@@ -344,8 +344,8 @@ func TestGateway_Node2xxLargeBody(t *testing.T) {
 	if er.Code != "NODE_ERROR" {
 		t.Fatalf("large body code=%q want NODE_ERROR", er.Code)
 	}
-	// last_seen NÃO deve ter sido atualizado em erro
-	// Não estritamente necessário, mas garante no-touch em falha
+	// The last seen instant must not be updated on an error, which is not strictly
+	// required but guarantees that a failure does not touch the node.
 }
 
 func TestGateway_Node2xxNonJSON(t *testing.T) {
@@ -437,7 +437,7 @@ func TestQueueSelector(t *testing.T) {
 	mon := monitor.NewMonitor()
 	limits := defaultLimits
 
-	// Filtra por Functions: só n2 hospeda "fn"
+	// Filter by functions: only the second node hosts the function.
 	sel := selection.QueueSelector{Mon: mon, Cfg: limits}
 	nds := []nodes.Node{
 		{NodeID: "n1", Layer: nodes.LayerBorda, Host: "h1", Functions: []string{"other"}},
@@ -448,7 +448,7 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("filter Functions: got %v want [n2]", out)
 	}
 
-	// Lista vazia e nil elegível para qualquer função
+	// An empty list and a nil list are eligible for any function.
 	nds2 := []nodes.Node{
 		{NodeID: "n1", Layer: nodes.LayerBorda, Host: "h1", Functions: []string{}},
 		{NodeID: "n2", Layer: nodes.LayerBorda, Host: "h2", Functions: nil},
@@ -459,7 +459,7 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("empty/nil Functions eligible: got %v want 3", out2)
 	}
 
-	// Delega ordenação a RankNodes: borda antes de nevoa
+	// The ordering is delegated to the ranking: the edge before the fog.
 	nds3 := []nodes.Node{
 		{NodeID: "nevoa1", Layer: nodes.LayerNevoa, Host: "h1"},
 		{NodeID: "borda1", Layer: nodes.LayerBorda, Host: "h2"},
@@ -469,7 +469,7 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("rank borda before nevoa: got %v", out3)
 	}
 
-	// Delega ordenação por cpu dentro da mesma camada: usa Monitor.Latest
+	// The ordering by processor usage within the same layer uses the latest telemetry.
 	mon2 := monitor.NewMonitor()
 	mon2.Update(newPkg("b1", 30))
 	mon2.Update(newPkg("b2", 10))
@@ -485,7 +485,7 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("cpu ordering: got %v want [b2 b3 b1]", nodeIDs(out4))
 	}
 
-	// Ausente no Monitor => tratado como +Inf (fica ao final)
+	// A node absent from the monitor is treated as infinite and goes to the end.
 	mon3 := monitor.NewMonitor()
 	mon3.Update(newPkg("b1", 5))
 	sel3 := selection.QueueSelector{Mon: mon3, Cfg: limits}
@@ -498,7 +498,7 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("missing telemetry +Inf at end: got %v", nodeIDs(out5))
 	}
 
-	// Não filtra DerivedStatus aqui: nó stale permanece se ativo por Functions
+	// The derived status is not filtered here, so a stale node stays if it hosts the function.
 	sel4 := selection.QueueSelector{Mon: mon, Cfg: limits}
 	nds6 := []nodes.Node{
 		{NodeID: "stale", Layer: nodes.LayerBorda, Host: "h1", LastSeen: time.Now().Add(-10 * time.Minute)},
@@ -508,8 +508,8 @@ func TestQueueSelector(t *testing.T) {
 		t.Fatalf("DerivedStatus not filtered in selector: got %v want 1", out6)
 	}
 
-	// Hard-limit removido (2026-09-28) e sobrecarga delegada a RankNodes:
-	// sobrecarregado filtrado; SLO NÃO filtra por camada.
+	// The hard limit was removed and the overload is delegated to the ranking, which
+	// filters an overloaded node, while the objective does not filter by layer.
 	mon4 := monitor.NewMonitor()
 	mon4.Update(newPkg("over", 95)) // cpu 95 > 85 => overloaded
 	sel5 := selection.QueueSelector{Mon: mon4, Cfg: limits}
@@ -555,13 +555,13 @@ func TestGateway_StaleFiltering(t *testing.T) {
 	}))
 	defer srv.Close()
 	ns, _ := nodes.NewNodeStore("")
-	// Cria nó stale manualmente (LastSeen 5 min atrás)
+	// Create a stale node manually, with the last seen instant five minutes in the past.
 	stale := nodes.Node{NodeID: "stale", Layer: nodes.LayerBorda, Host: hostFromURL(t, srv.URL), LastSeen: time.Now().Add(-5 * time.Minute)}
-	// Injeta direto no map (sem Upsert que sobrescreve LastSeen)
+	// Inject it directly in the map, since the upsert would overwrite the last seen instant.
 	ns2 := ns
 	// Use hack via Upsert then manipulate: we need to access private field.
-	// Instead, test via time: Upsert cria LastSeen=now, então fica ativo; filtra não deve descartar.
-	// Para stale, vamos criar gateway com staleAfter curto e fazer sleep.
+	// The upsert writes the current instant, so the node stays active and the filter
+	// must not discard it. For a stale node the gateway uses a short horizon and a sleep.
 	gw := newTestGateway(ns)
 	gw.staleAfter = 10 * time.Millisecond
 	_, _ = ns.Upsert(nodes.Node{NodeID: "n1", Layer: nodes.LayerBorda, Host: hostFromURL(t, srv.URL)})
@@ -598,8 +598,8 @@ func TestGateway_ContextCancelBeforeFirstAttempt(t *testing.T) {
 	rec := httptest.NewRecorder()
 	gw.Handle(rec, req)
 
-	// Zero tentativas por contexto cancelado (AUD-26, adendo ADR-0008
-	// 2026-09-17): 504 NO_NODE_AVAILABLE retryable, nunca o 502 stale do
+	// Zero attempts from a cancelled context map to a retryable answer of no node
+	// available, and never to the stale internal error of the initial failure.
 	// failure inicial.
 	if rec.Code == 0 {
 		t.Fatalf("status=0: expected a non-zero status when context is canceled before first attempt")
@@ -620,8 +620,8 @@ func TestGateway_ContextCancelBeforeFirstAttempt(t *testing.T) {
 }
 
 func TestGateway_CustomStaleAfter(t *testing.T) {
-	// Testa que staleAfter personalizado é passado corretamente para o Gateway
-	// quando usando o RiskSelector com Base contendo QueueSelector.
+	// A custom stale horizon is passed to the gateway when the risk selector is
+	// used with a base that contains the queue selector.
 	now := time.Now()
 	mon := monitor.NewMonitor()
 	cfg := selection.LimitsConfig{MaxCPUPct: 85, MaxMemPct: 90, MaxPSIAvg10: 25}
@@ -632,7 +632,7 @@ func TestGateway_CustomStaleAfter(t *testing.T) {
 	if gw.staleAfter != 5*time.Minute {
 		t.Fatalf("expected staleAfter=5m, got %v", gw.staleAfter)
 	}
-	// Teste com valor zero (deve cair para defaultStaleAfter)
+	// A zero value falls back to the default stale horizon.
 	ns2, _ := nodes.NewNodeStore("")
 	gw2 := NewGatewayWithHistory(GatewayConfig{Nodes: ns2, Monitor: mon, Selector: riskSel, MinSamples: 1, Criteria: selection.DefaultCriteria, Clock: time.Now})
 	if gw2.staleAfter != defaultStaleAfter {
@@ -737,8 +737,8 @@ func TestClassifyAttempt(t *testing.T) {
 			wantMet:  false,
 		},
 		{
-			// Cenário AUD-21: porta "15040" contém "504" mas não é timeout —
-			// sem o sentinela do status real, o outcome é falha.
+			// The port contains the digits of the status but is not a timeout, and
+			// without the sentinel of the real status the outcome would be a failure.
 			name:     "substring 504 solta (porta 15040) => falha",
 			err:      errors.New(`falha ao contatar nó "n1": dial tcp 127.0.0.1:15040: connection refused`),
 			latency:  100 * time.Millisecond,
@@ -792,8 +792,8 @@ func TestClassifyOutcome(t *testing.T) {
 	if got := classifyOutcome(errors.New("504 Gateway Timeout")); got != history.OutcomeTimeout {
 		t.Fatalf("504 => %q want timeout", got)
 	}
-	// Cenário AUD-21: timeout ancorado no sentinela do status real (sem
-	// substring); porta "15040" contém "504" mas classifica como falha.
+	// Scenario of the timeout: the classification is anchored in the sentinel of the
+	// real status and never in a substring, so the port that contains the digits of the status classifies as a failure.
 	if got := classifyOutcome(fmt.Errorf("%w: status real", ErrAttemptTimeout)); got != history.OutcomeTimeout {
 		t.Fatalf("sentinela => %q want timeout", got)
 	}
@@ -816,7 +816,7 @@ func TestNewGatewayWithHistoryDefaults(t *testing.T) {
 	if len(gw.criteria) != len(selection.DefaultCriteria) {
 		t.Fatalf("criteria len=%d want %d", len(gw.criteria), len(selection.DefaultCriteria))
 	}
-	// clock injectable determinístico
+	// Deterministic injectable clock.
 	fixed := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
 	gw2 := NewGatewayWithHistory(GatewayConfig{Nodes: ns, Monitor: mon, Selector: sel, Criteria: selection.DefaultCriteria, Clock: func() time.Time { return fixed }})
 	if !gw2.clock().Equal(fixed) {
@@ -836,30 +836,30 @@ func TestNewGatewayWithHistoryDefaults(t *testing.T) {
 // gateway_race_test.go — races
 // ---------------------------------------------------------------------------
 
-// raceDefaultLimits espelha selection_test.raceDefaultLimits para os testes de
-// corrida (mesmos tetos conservadores da Sprint 6).
+// raceDefaultLimits mirrors the limits of the selection tests, with the same
+// conservative ceilings, for the race tests.
 var raceDefaultLimits = selection.LimitsConfig{
 	MaxCPUPct:   85,
 	MaxMemPct:   90,
 	MaxPSIAvg10: 25,
 }
 
-// TestGatewayRace_Handle_List_Upsert_Concurrent testa data races entre (ver
-// Handle em gateway_handle.go e List/Upsert em ../nodes/nodes.go):
-// - Gateway.Handle (lê nós via List(), usa buffer do pool para o corpo)
-// - NodeStore.List (chamado por Handle, devolve fatia nova)
-// - NodeStore.Upsert (escritas concorrentes no registro de nós)
+// TestGatewayRace_Handle_List_Upsert_Concurrent tests the data races between
+// the handler and the node store, which are the handler reading the nodes and
+// encoding the body into a buffer of the pool, the listing that returns a new
+// slice and the concurrent writes of the upsert into the registry.
 //
-// Valida que:
-// 1. A cópia antes do Put em gateway_handle.go:72 evita aliasing do buffer do pool
-// 2. O filtro all[:0] em gateway_handle.go:36 é seguro (List devolve fatia nova)
-// 3. Upsert concorrente não corrompe a iteração de List nem a seleção de nós
+// It validates that:
+// 1. The copy before the release avoids the aliasing of the buffer of the pool.
+// 2. The filtering in place is safe, since the listing returns a new slice.
+// 3. A concurrent upsert does not corrupt the iteration of the listing nor the
+// selection of the nodes.
 func TestGatewayRace_Handle_List_Upsert_Concurrent(t *testing.T) {
-	// Servidor de nó lento que segura conexões para maximizar a sobreposição
+	// A slow node server that holds the connections to maximize the overlap.
 	var nodeReqCount atomic.Int64
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		nodeReqCount.Add(1)
-		// Segura a conexão brevemente para aumentar a janela de concorrência
+		// Hold the connection briefly to widen the window of concurrency.
 		time.Sleep(5 * time.Millisecond)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"result":"ok"}`))
@@ -986,13 +986,6 @@ func TestGatewayRace_Handle_List_Upsert_Concurrent(t *testing.T) {
 // TestGatewayRace_PooledBufferAliasing specifically targets the buffer pool
 // aliasing scenario: concurrent Handle calls that encode request bodies
 // into the same pooled buffer must not corrupt each other's bodyBytes.
-// TestGatewayRace_PooledBufferAliasing prova o contrato de aliasing do
-// pool de buffers (PROJECT §2, adendo edge §7: "copy obrigatório antes de
-// Put"): 100 Handle concorrentes, cada um com input DISTINTO, e o nó
-// devolve o corpo que RECEBEU. Só assim uma corruption de bodyBytes
-// (o buffer do pool reusado por outra goroutine antes do envio) fica
-// visível — a versão anterior ecoava o header Authorization, que não tem
-// relação com o buffer, então o teste passaria mesmo com o bug presente.
 func TestGatewayRace_PooledBufferAliasing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "" {
@@ -1043,10 +1036,10 @@ func TestGatewayRace_PooledBufferAliasing(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			token := "token-" + string(rune('A'+i%26)) + "-" + string(rune('0'+i/26))
-			// Input ÚNICO por chamada: se o bodyBytes de uma goroutine for
-			// sobrescrito por outra antes do envio, o nó devolve outro
-			// payload e a comparação abaixo acusa. Com input repetido
-			// (i%10) a corruption seria invisível.
+			// A unique input per call: if the body buffer of a goroutine is
+			// overwritten by another one before the send, the node returns
+			// another payload and the comparison below fails, while a repeated
+			// input would make the corruption invisible.
 			want := fmt.Sprintf(`{"data":"call-%d"}`, i)
 			reqBody := fmt.Sprintf(`{"function":"echo","input":%s}`, want)
 			req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(reqBody))
@@ -1066,17 +1059,17 @@ func TestGatewayRace_PooledBufferAliasing(t *testing.T) {
 					errors[i] = err
 					return
 				}
-				// O eco é o INPUT que o nó recebeu. Divergir = o
-				// bodyBytes desta chamada foi sobrescrito por outra
-				// goroutine antes do envio (o bug de aliasing).
+				// The echo is the input that the node received, so a divergence
+				// means that the body buffer of this call was overwritten by
+				// another goroutine before the send, which is the aliasing bug.
 				if resp["echo"] != want {
 					errors[i] = &bodyCorruptionError{expected: want, got: resp["echo"]}
 					return
 				}
 				results[i] = want
 			} else {
-				// Non-200 sob race é aceitável (nó ocupado, etc.); a
-				// ausência de erro de corruption é o que este teste mede.
+				// A non-success status under a race is acceptable, since the node
+				// may be busy, and the absence of a corruption is what this test measures.
 				results[i] = "status-" + string(rune('0'+rec.Code/100))
 			}
 		}()
@@ -1123,24 +1116,23 @@ func (e *bodyCorruptionError) Error() string {
 	return "body corruption: input esperado=" + e.expected + " recebido=" + e.got
 }
 
-// (TestGatewayRace_ListDuringUpsert e o tipo corruptNodeError foram
-// removidos: o corpo do teste exercitava apenas nodes.NodeStore (List vs
-// Upsert vs Delete, 1000 iterações) sem tocar num Gateway — vírgula no
-// nome. O owner do contrato de concorrência do store é
-// internal/arbitro/nodes/nodes_test.go:TestNodeStore_UpsertConcorrenteIsNew;
-// e a afirmação que importa aqui — o registro do gateway não corrompe
-// durante List/Upsert concorrentes — já é de
-// TestGatewayRace_Handle_List_Upsert_Concurrent, que roda Handle de verdade
-// contra as mutações do store.)
+// The test of a listing during an upsert and the type of the corruption error
+// were removed: the body of the test exercised only the node store, with a
+// listing against an upsert and a delete over a thousand iterations, without
+// touching a gateway, so the name did not match the content. The store owns its
+// concurrency contract in its own test, and the assertion that matters here,
+// that the registry of the gateway does not corrupt during a concurrent listing
+// and upsert, belongs to the test that runs the real handler against the
+// mutations of the store.
 
 // ---------------------------------------------------------------------------
 // gateway_auth_test.go — 401 passthrough
 // ---------------------------------------------------------------------------
 
-// TestGateway_401PassThrough cobre o repasse de auth (correcao-seguranca,
-// todo 8, I2): o Authorization do cliente é encaminhado verbatim ao nó e,
-// com 401 do nó, o gateway responde 401 UNAUTHORIZED após exatamente 1
-// tentativa — credencial errada não se cura com failover.
+// TestGateway_401PassThrough covers the forwarding of the authorization: the
+// header of the client is forwarded verbatim to the node and, with an
+// unauthorized answer from the node, the gateway answers the same status after
+// exactly one attempt, since a wrong credential does not heal with a failover.
 func TestGateway_401PassThrough(t *testing.T) {
 	var attempts int64
 	var fwdAuth string
@@ -1257,7 +1249,7 @@ func TestInvocationLogAppendJSONL(t *testing.T) {
 			t.Errorf("linha %d slo = %+v, want max_latency 500 + min_rps 10", i, got.SLO)
 		}
 	}
-	// Linha 0 carrega o bloco de métricas verbatim; demais omitem o campo.
+	// The first line carries the metrics block verbatim, and the others omit the field.
 	var first map[string]any
 	if err := json.Unmarshal(lines[0], &first); err != nil {
 		t.Fatal(err)

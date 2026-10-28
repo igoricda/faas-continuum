@@ -204,8 +204,8 @@ func TestQualityPartition_UnqualifiedOnlyStillReturnsNodes(t *testing.T) {
 	if got := q.Select(candidates, "alpr-yolo-tiny", slo); len(got) == 0 {
 		t.Fatal("conjunto só-não-qualificado deve retornar nós (downgrade, nunca vazio)")
 	}
-	// Mesma garantia no seletor canônico (RiskSelector): a partição de
-	// qualidade é bloco compartilhado (applyQualityPartition).
+	// The same guarantee in the canonical risk selector, since the quality
+	// partition is a shared block.
 	risk := &RiskSelector{Learner: learn.NewLearner(DefaultRiskConfig().LearnConfig())}
 	if got := risk.Select(candidates, "alpr-yolo-tiny", slo); len(got) == 0 {
 		t.Fatal("risk: conjunto só-não-qualificado deve retornar nós")
@@ -246,7 +246,7 @@ func TestQualityNoReorder_AllQualifyIdenticalOrder(t *testing.T) {
 	if !reflect.DeepEqual(verbatim, declared) {
 		t.Fatalf("tudo-qualificado deve preservar a ordem verbatim:\n%v\n%v", verbatim, declared)
 	}
-	// Mesma invariante no seletor canônico (RiskSelector).
+	// The same invariant in the canonical risk selector.
 	risk := &RiskSelector{Learner: learn.NewLearner(DefaultRiskConfig().LearnConfig())}
 	verbatimRisk := risk.Select(candidates, "alpr-yolo-tiny", nil)
 	declaredRisk := risk.Select(candidates, "alpr-yolo-tiny", qualitySLO(t, `{"accuracy":0.90}`))

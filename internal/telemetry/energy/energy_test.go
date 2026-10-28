@@ -433,7 +433,7 @@ func TestPowerSupplyFrozenModeAfterDeletion(t *testing.T) {
 	}
 	// Modo congelado: power_now = true
 
-	// Remove power_now após a construção
+	// Remove the instantaneous power after the construction
 	powerNowPath := filepath.Join(root, "BAT1", "power_now")
 	if err := os.WriteFile(powerNowPath, []byte{}, 0o644); err != nil {
 		t.Fatalf("WriteFile(vazio): %v", err)

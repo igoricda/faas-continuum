@@ -117,7 +117,7 @@ func TestPersistRoundTrip(t *testing.T) {
 	if !ok || got != "tok-ocr-tv" {
 		t.Fatalf("downstream pós-reload=%q,%v", got, ok)
 	}
-	// Arquivo não contém plaintext do token de categoria.
+	// The file does not contain the plaintext of the category token.
 	raw, _ := os.ReadFile(path)
 	if stringContains(string(raw), plain) {
 		t.Fatal("plaintext do token de categoria vazou no arquivo")

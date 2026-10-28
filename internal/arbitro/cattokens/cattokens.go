@@ -75,7 +75,7 @@ func downKey(category, nodeID, concrete string) string {
 type Store struct {
 	mu         sync.RWMutex
 	tokens     map[string][32]byte // categoria -> sha256(token em texto plano)
-	downstream map[string]string   // downKey -> token do nó em texto plano
+	downstream map[string]string   // flat key to the plaintext token of the node
 	path       string              // empty means no persistence, which is the case of the tests
 }
 

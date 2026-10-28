@@ -1,10 +1,10 @@
 package server
 
-// Ingestão periódica de capacidade via HTTP (capacity-history-arbitro,
-// todo 7): o handleTelemetry funde pkg.Capacity com recvNow do Árbitro.
-// TestServer_TelemetriaCorreta204EGetMostra prova o Latest, mas nenhum
-// teste lê GetCapacity — aqui o merge, o no-op sem capacity e o
-// Timestamp do nó ignorado (frescura só por recepção).
+// Periodic ingestion of the capacity over HTTP: the telemetry handler merges the
+// capacity of the package with the reception instant of the arbiter. The test
+// of the correct telemetry proves the latest reading, but no test reads the
+// capacity, so here the merge, the absence of a capacity and the timestamp of
+// the node are covered, since the freshness comes only from the reception.
 
 import (
 	"net/http"
@@ -54,7 +54,7 @@ func TestTelemetryCapacityPeriodicMerge(t *testing.T) {
 	if !ok || alpr.MaxInstances != 4 || alpr.InstancesAvailable != 4 {
 		t.Fatalf("alpr = (%+v,%v), esperado (max=4,avail=4,true)", alpr, ok)
 	}
-	// latest clássico segue intacto junto da ingestão de capacidade.
+	// The classic latest reading stays intact next to the ingestion of the capacity.
 	if latest, ok := mon.Latest("n1"); !ok || latest.CPUUsagePct != 10 {
 		t.Fatalf("Latest = (%+v,%v), esperado cpu=10", latest, ok)
 	}
@@ -89,8 +89,9 @@ func TestTelemetryCapacityTimestampIgnored(t *testing.T) {
 	h := srv.Handler()
 	registerCapacityNode(t, h, token, "n1")
 
-	// Timestamp do nó 48h no futuro: irrelevante — frescura mede o
-	// recvNow do Árbitro, então a entrada nasce fresca.
+	// The timestamp of the node is forty-eight hours in the future and is
+	// irrelevant, since the freshness measures the reception instant of the
+	// arbiter and the entry starts fresh.
 	pkg := telemetry.Package{
 		NodeID:         "n1",
 		Timestamp:      time.Now().UTC().Add(48 * time.Hour),

@@ -1,7 +1,7 @@
-// Concorrência do v2 (SELETOR-V2 §13): 64 goroutines × 1000 Select com
-// reserva/liberação simulada. Ordem de implementação (§7.5): k fresco +
-// banda primeiro; reserva atômica (Reserve) SÓ se este teste falhar sem
-// ela (H4).
+// Concurrency of the selector: sixty-four goroutines running a thousand
+// selections each, with a simulated reservation and release. The fresh number of
+// requests in flight and the band come first, and the atomic reservation exists
+// only because this test fails without it.
 package selection
 
 import (
@@ -104,7 +104,7 @@ func TestConcurrentSelect_NoHerd(t *testing.T) {
 						firstCount[j].Add(1)
 					}
 				}
-				// Reserva/liberação simulada (H4): segura brevemente.
+				// Simulated reservation and release, which holds the node briefly.
 				g.reserve(out[0].NodeID, "fn")
 				g.release(out[0].NodeID, "fn")
 			}

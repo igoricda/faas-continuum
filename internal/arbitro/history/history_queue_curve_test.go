@@ -5,9 +5,10 @@ import (
 	"time"
 )
 
-// seedQueueEntry grava UMA entrada na curva de fila do par (group, node) com
-// o Inflight (k) e o desfecho pedidos. Helper de teste: a curva agrega TODOS
-// os segmentos do par, então o bucket do cenário não importa para o contrato.
+// seedQueueEntry records one entry in the queue curve of the pair of group and
+// node, with the requested number of requests in flight and the requested
+// outcome. The curve aggregates every segment of the pair, so the bucket of the
+// scenario does not matter for the contract.
 func seedQueueEntry(t *testing.T, h *History, group, nodeID string, ts time.Time, outcome string, k int, latMS int64, cold bool) {
 	t.Helper()
 	if err := h.AppendWithGroup(Entry{
@@ -24,13 +25,15 @@ func seedQueueEntry(t *testing.T, h *History, group, nodeID string, ts time.Time
 	}
 }
 
-// TestQueueCurveBuckets fixa o contrato da curva de entrega por profundidade
-// de fila: faixas de k (queueBucketEdges), contagem por desfecho com a MESMA
-// taxonomia de classifyOutcomeBucket (saturação fora da taxa de entrega), p95
-// só sobre sucessos warm (cold conta como entrega, não no p95) e k<=0 fora da
-// curva. Sem este teste, uma mudança no mapeamento de faixas ou na taxonomia
-// passaria silenciosa e o teto aprendido do seletor seria calibrado por dados
-// errados.
+// TestQueueCurveBuckets fixes the contract of the delivery curve by depth of the
+// queue: the bands of the number of requests in flight, the count per outcome
+// with the same taxonomy as the classification of the outcomes, which keeps the
+// saturation out of the delivery rate, the percentile over the warm successes
+// only, since a cold start is a delivery without entering the percentile, and the
+// exclusion of a zero number of requests in flight from the curve. Without this
+// test a change in the mapping of the bands or in the taxonomy would pass
+// silently, and the learned ceiling of the selector would be calibrated with
+// wrong data.
 func TestQueueCurveBuckets(t *testing.T) {
 	now := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
 	h, err := NewHistory("", 500)
@@ -43,17 +46,17 @@ func TestQueueCurveBuckets(t *testing.T) {
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 1, 100, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 1, 200, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeFalha, 1, 0, false)
-	// Faixa 2: 1 sucesso cold + 1 warm + 1 saturação (fora da taxa).
+	// The second band: one cold success, one warm success and one saturation, which is out of the rate.
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 2, 5000, true)
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 2, 300, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeOrcamentoExcedido, 2, 0, false)
-	// Faixa 3-5: 5 sucessos + 2 falhas (borda do piso de evidência).
+	// The bands of three to five requests in flight: five successes and two failures, at the edge of the floor of evidence.
 	for _, lat := range []int64{400, 500, 600, 700, 800} {
 		seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 4, lat, false)
 	}
 	seedQueueEntry(t, h, group, node, now, OutcomeTimeout, 3, 0, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeTimeout, 5, 0, false)
-	// Faixa 6-10: 1 sucesso. Faixa 11-20: 1 falha. Faixa 21-40: 1 saturação.
+	// The band of six to ten requests in flight: one success. The band of eleven to twenty: one failure. The band of twenty-one to forty: one saturation.
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 6, 900, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeTimeout, 20, 0, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeRejeicaoCapacidade, 21, 0, false)
@@ -85,12 +88,12 @@ func TestQueueCurveBuckets(t *testing.T) {
 	}
 }
 
-// TestQueueCurveWindowAndIsolation fixa os gates de leitura: a janela
-// temporal exclui entrada velha, o prefixo isola o par (grupo, nó) de outro nó
-// e de outro grupo, e um par sem NENHUMA entrada classificável devolve
-// ok=false (o chamador não inventa curva). Sem isso, a curva de um nó poderia
-// calibrar o teto de outro — exatamente o erro que o self-learning não pode
-// cometer.
+// TestQueueCurveWindowAndIsolation fixes the reading gates: the temporal window
+// excludes an old entry, the prefix isolates the pair of group and node from
+// another node and from another group, and a pair without any classifiable entry
+// reports false, so the caller invents no curve. Without this the curve of one
+// node could calibrate the ceiling of another, which is exactly the error that
+// the self-learning cannot make.
 func TestQueueCurveWindowAndIsolation(t *testing.T) {
 	now := time.Date(2026, 10, 2, 21, 0, 0, 0, time.UTC)
 	h, err := NewHistory("", 500)

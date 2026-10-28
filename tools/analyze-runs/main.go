@@ -138,7 +138,7 @@ func analyze(path string) (report, error) {
 			if n <= 0 {
 				n = 1
 			}
-			truth[n] = ln // JSONL é append-only: última ocorrência vence
+			truth[n] = ln // the log is append-only, so the last occurrence wins
 		}
 		if len(truth) >= 2 {
 			rep.Hedged++
@@ -172,7 +172,7 @@ func analyze(path string) (report, error) {
 			// it only applies when there was a hedge, since with one attempt the
 			// delivered number is always one.
 			if len(truth) >= 2 {
-				rep.HedgeWinRate++ // acumulador temporário (contagem)
+				rep.HedgeWinRate++ // temporary accumulator for the count
 			}
 		}
 		if first, ok := truth[1]; ok {

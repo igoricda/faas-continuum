@@ -10,12 +10,12 @@
 //
 // Cache discipline mirrors ExpectedCost EXACTLY (history_stats.go,
 // costCacheEntry + costGen in history_store.go) — one pattern, not three:
-//   - same mutex (h.mu), same generation map (h.costGen, key grupo\x00nó),
+//   - same mutex (h.mu), same generation map (h.costGen, key group\x00node),
 //     same cap (maxExpCostCacheEntries=1024, recreate-on-overflow),
 //     same invalidation trigger points (appendLocked/Supersede bump the
 //     pair gen; agg fan-out appends pass pair=="" and never bump, exactly
 //     as ExpectedCost ignores agg keys).
-//   - SEPARATE map (h.usageCache, key grupo\x00nó\x00camada): the usage
+//   - SEPARATE map (h.usageCache, key group\x00node\x00layer): the usage
 //     curve never shares entries with the PSI cache, so a PSI hit can never
 //     serve usage data and vice versa. Invalidation stays per-pair via the
 //     stored gen — any append to the pair bumps costGen[pair] and all layer
@@ -28,7 +28,7 @@
 //     move — no I/O under lock anywhere.
 //
 // Prior staleness note: the layer prior pools entries from every node in
-// (grupo,camada), but invalidation fires only on appends to the QUERIED
+// (group,layer), but invalidation fires only on appends to the QUERIED
 // pair — appends by sibling nodes that move the prior do NOT invalidate
 // this pair's entry (same trade-off class as a pooled read under a
 // per-pair gen; the next append to this pair, or window/time-guard expiry,
@@ -80,14 +80,14 @@ func usagePointOfEntry(e Entry) UsagePoint {
 }
 
 // usageCacheEntry is the memoized UsageCurveFor result for ONE
-// (grupo,nó,camada) key, shaped exactly like psiCacheEntry/costCacheEntry:
+// (group,node,layer) key, shaped exactly like psiCacheEntry/costCacheEntry:
 // the fitted posterior `curve`/`ok` computed at `gen` (costGen of the
-// grupo\x00nó pair) and instant `computedAt`. `oldest` = smallest Timestamp
+// group\x00node pair) and instant `computedAt`. `oldest` = smallest Timestamp
 // INCLUDED from the union of prior+local scans; `newest` = largest
 // Timestamp of ANY entry examined in either scan; `futureFrom` = smallest
 // Timestamp among solo+usage-eligible entries with ts > computedAt
 // (future-relative). Reuse rules are the ExpectedCost ones verbatim (see
-// costCacheEntry). ordem 8B.
+// costCacheEntry). aligned to eight bytes.
 type usageCacheEntry struct {
 	computedAt time.Time
 	oldest     time.Time
@@ -99,10 +99,10 @@ type usageCacheEntry struct {
 	ok         bool
 }
 
-// UsageCurveFor fits the pooled no-PSI usage curve for (grupo,nó): the
+// UsageCurveFor fits the pooled no-PSI usage curve for (group,node): the
 // layer prior over solo-only usage-known samples in-window across ALL
-// buckets of (grupo,camada) — read through the AggLayerKey fan-out
-// segments — plus the node-local posterior over (grupo,nó) shrunk to that
+// buckets of (group,layer) — read through the AggLayerKey fan-out
+// segments — plus the node-local posterior over (group,node) shrunk to that
 // prior (PosteriorUsageCurve: thin nodes stay glued to the prior until
 // SoloN>=UsageMinClassSamples).
 //

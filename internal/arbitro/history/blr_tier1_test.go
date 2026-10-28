@@ -1,12 +1,14 @@
 package history
 
-// Unit tests for Tier0/Tier1 calibration (ADR-0007 D32, see blr.go):
-// q-hat math on hand-computed residuals (incl. below-minimum unavailability
-// and one-sidedness vs absolute residuals), floor binding on tiny
-// residuals, spec ranges of the Tier0 constants, and determinism.
-// Expectations derive from the documented formulas — never from the
-// implementation's internals. blrLawPoints/soloUsagePoint are reused from
-// blr_test.go / usage_curve_test.go (same package).
+// Unit tests of the calibration of the parametric band and of its conformal
+// correction: the math of the correction over hand computed residuals, including
+// the unavailability below the minimum of samples and the one-sided nature
+// against the absolute residuals, the floor binding on tiny residuals, the
+// specified ranges of the constants of the parametric band and the determinism.
+//
+// The expectations come from the documented formulas and never from the
+// internals of the implementation. The helpers of the law points and of the
+// solo usage point are reused from the other test files of the package.
 
 import (
 	"math"

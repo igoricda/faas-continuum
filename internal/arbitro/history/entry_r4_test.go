@@ -68,7 +68,7 @@ func TestEntryR4(t *testing.T) {
 			t.Fatalf("PSI=(%v,%v), want (12.5,8.25)",
 				entries[0].PSICpuSomeAvg10, entries[0].PSIMemFullAvg10)
 		}
-		// A sentinela não vaza para o mapa em memória.
+		// The sentinel does not leak into the map in memory.
 		for _, k := range h2.Keys() {
 			if k == historySchemaSentinelKey {
 				t.Fatalf("sentinela vazou para Keys()")
@@ -94,8 +94,9 @@ func TestEntryR4(t *testing.T) {
 	})
 
 	t.Run("r3-without-fields decodifica PSI==0 (tolerante, ausente=>unknown)", func(t *testing.T) {
-		// JSON em forma r3: sem chaves PSI, sem sentinela — decodifica no
-		// nível de Entry (a REJEIÇÃO de arquivo r3 é no NewHistory, abaixo).
+		// A JSON in the old format, without the pressure keys and without the
+		// sentinel, decodes at the level of the entry, while the rejection of the
+		// old file format happens in the constructor, below.
 		wire := `{"timestamp":"2026-09-23T21:52:00Z","function_name":"f","node_id":"n1",` +
 			`"outcome":"sucesso","scenario_context":{"load_bucket":"25-50%"},` +
 			`"observed_latency_ms":120,"slo_met":true,"cold_start":false}`
@@ -108,17 +109,17 @@ func TestEntryR4(t *testing.T) {
 		}
 	})
 
-	// Este caso carregava um falso-verde antes da auditoria de 2026-09-28:
-	// (1) escrevia bytes NUL CRUOS na chave, o que torna o JSON invalido --
-	// o loader falhava no ramo "corrompido", nunca no de "sem marcador r4";
-	// (2) asseverava Contains(err, "migrador"), mas o caminho do TempDir
-	// carrega o NOME do subtesto, que contem a palavra "migrador" -- a
-	// assercao era satisfeita pelo path, nao pela mensagem. Ou seja: o
-	// caminho fail-closed do r3 nunca foi exercitado de fato.
+	// This case used to be a false green: it wrote raw null bytes in the key,
+	// which makes the JSON invalid, so the loader failed in the corrupted branch
+	// and never in the branch of the missing marker, and it asserted that the
+	// message mentioned the migrator, but the path of the temporary directory
+	// carries the name of the subtest, which contains that word, so the assertion
+	// was satisfied by the path and not by the message. The fail-closed path of the
+	// old format was therefore never really exercised.
 	//
-	// Aqui o blob usa o escape JSON \u0000 (como a fixture pinada real), o
-	// que de fato chega ao ramo de formato obsoleto, e as asercoes usam
-	// literais que NAO podem aparecer no path.
+	// Here the blob uses the JSON escape of the null character, as in the real
+	// pinned fixture, which reaches the obsolete format branch, and the assertions
+	// use literals that cannot appear in the path.
 	t.Run("NewHistory sobre r3 sem marcador => erro fail-closed orientando remocao", func(t *testing.T) {
 		blob := "{\"fn\\u0000n1\\u000025-50%\":[{\"timestamp\":\"2026-09-23T21:52:00Z\"," +
 			"\"function_name\":\"f\",\"node_id\":\"n1\",\"outcome\":\"sucesso\"," +
@@ -128,8 +129,8 @@ func TestEntryR4(t *testing.T) {
 		if err := os.WriteFile(path, []byte(blob), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		// Sanidade do fixture: tem de ser JSON VALIDO, senao o teste
-		// viraria de novo um "corrompido" disfarçado de r3.
+		// Sanity of the fixture: it has to be valid JSON, otherwise the test would
+		// become a corrupted case disguised as an obsolete format.
 		var probe map[string][]Entry
 		if err := json.Unmarshal([]byte(blob), &probe); err != nil {
 			t.Fatalf("fixture r3 invalida: %v", err)
@@ -141,16 +142,16 @@ func TestEntryR4(t *testing.T) {
 			}
 			t.Fatal("NewHistory sobre r3 sem marcador deveria retornar erro")
 		}
-		// Deve ser o ramo de formato obsoleto, e NAO o de JSON corrompido.
+		// It has to be the obsolete format branch and not the corrupted JSON one.
 		if strings.Contains(err.Error(), "corrompido") {
 			t.Fatalf("caiu no ramo de corrompido em vez do de formato r3: %v", err)
 		}
 		if !strings.Contains(err.Error(), "sem marcador r4") {
 			t.Fatalf("erro nao nomeia o formato r3 sem marcador: %v", err)
 		}
-		// O r3 foi aposentado (2026-09-28) e o migrador removido: a
-		// orientacao correta ao operador e remover o arquivo, e a mensagem
-		// nao pode mandar rodar um comando que nao existe mais.
+		// The old format was retired and the migrator removed, so the correct
+		// guidance to the operator is to remove the file, and the message cannot
+		// tell the operator to run a command that no longer exists.
 		if !strings.Contains(err.Error(), "aposentado") {
 			t.Fatalf("erro nao orienta a remocao do arquivo r3: %v", err)
 		}

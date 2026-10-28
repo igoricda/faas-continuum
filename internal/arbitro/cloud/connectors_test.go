@@ -12,8 +12,9 @@ import (
 	"testing"
 )
 
-// Config por função válida (ADR-0011, item 3): dois endpoints distintos,
-// anônimos (auth_scheme none, sem token — AuthLevel.ANONYMOUS).
+// A valid configuration per function with two distinct endpoints and anonymous
+// access, with no token, since the authentication level allows anonymous
+// calls.
 func validPerFunctionConfig(urlA, urlB string) CloudFallbackConfig {
 	return CloudFallbackConfig{
 		Connector: ConnectorAzureFunctions,
@@ -41,8 +42,9 @@ func newMemStoreWith(t *testing.T, cfg CloudFallbackConfig) *CloudStore {
 	return s
 }
 
-// Validação do formato por função (ADR-0011, item 3): mesma regra por
-// entrada do mapa; misturas sem connector são rejeitadas (fail-closed).
+// Validation of the format per function, with the same rule for every entry of the
+// map, and the mixtures without a connector are rejected, which is the
+// fail-closed behavior.
 func TestCloudConfig_PerFunctionValidation(t *testing.T) {
 	good := func() FunctionEndpoint {
 		return FunctionEndpoint{EndpointURL: "https://example.com/api/f", InputContentType: "application/json", AuthScheme: "none"}
@@ -85,9 +87,10 @@ func TestCloudConfig_PerFunctionValidation(t *testing.T) {
 	}
 }
 
-// Persistência do formato por função (ADR-0011, item 6): tmp+rename+
-// 0600+fsync e JSON compacto como o legado; migração lazy no próximo Set
-// (o que é Set é o que é persistido, nos dois sentidos).
+// Persistence of the format per function, with a temporary file, a rename, the
+// restrictive permissions and the synchronous write, and the compact JSON of the
+// legacy format, with a lazy migration on the next write, so what is written is
+// what is persisted in both directions.
 func TestCloudStore_PerFunctionRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cloud.json")
@@ -135,7 +138,7 @@ func TestCloudStore_PerFunctionRoundTrip(t *testing.T) {
 		t.Fatalf("Get após reabrir = false")
 	}
 
-	// Migração lazy reversa: Set legado sobrescreve o arquivo no formato plano.
+	// The lazy migration is reversible: a write in the legacy format overwrites the file with the flat format.
 	mustSet(t, s2, CloudFallbackConfig{EndpointURL: "https://x.example/i", InputContentType: "application/json", AuthScheme: "none"})
 	raw, _ := os.ReadFile(path)
 	if strings.Contains(string(raw), `"connector"`) {
@@ -147,7 +150,7 @@ func TestCloudStore_PerFunctionRoundTrip(t *testing.T) {
 	}
 }
 
-// Arquivo legado em disco continua lido (ADR-0011, item 5).
+// A legacy file on the disk is still read.
 func TestCloudStore_LoadLegacyFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cloud.json")
 	legacy := `{"endpoint_url":"https://nuvem.example.com/invoke","input_content_type":"application/json","auth_scheme":"Bearer","auth_token":"tok"}`
@@ -164,9 +167,9 @@ func TestCloudStore_LoadLegacyFile(t *testing.T) {
 	}
 }
 
-// Sucesso do AzureFunctionsConnector (ADR-0011, itens 2-3): POST do input
-// CRU (sem envelope), Content-Type configurado, sem Authorization quando
-// anônimo; corpo 2xx devolvido bruto.
+// Success of the connector of the functions, with the post of the raw input
+// without an envelope, the configured content type, no authorization header when
+// the access is anonymous, and the raw body of the success returned.
 func TestAzureFunctionsConnector_Success(t *testing.T) {
 	var gotMethod, gotCT, gotAuth, gotBody, gotCustom string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -214,8 +217,8 @@ func TestAzureFunctionsConnector_Success(t *testing.T) {
 	}
 }
 
-// Auth e headers (ADR-0011, item 2): Authorization só com token;
-// required sem valor não é enviado.
+// Authentication and headers: the authorization header is sent only with a token,
+// and a required header without a value is not sent.
 func TestAzureFunctionsConnector_Auth(t *testing.T) {
 	var gotAuth string
 	var gotMissing string
@@ -245,8 +248,8 @@ func TestAzureFunctionsConnector_Auth(t *testing.T) {
 	}
 }
 
-// Roteamento por função (ADR-0011, item 2): cada função no seu endpoint;
-// função sem entrada => ErrFunctionNotMapped.
+// Routing per function, with each function in its own endpoint, and a function
+// without an entry gives the error of an unmapped function.
 func TestAzureFunctionsConnector_Routing(t *testing.T) {
 	mk := func(tag string) *httptest.Server {
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -273,8 +276,8 @@ func TestAzureFunctionsConnector_Routing(t *testing.T) {
 	}
 }
 
-// Falhas de transporte e tamanho (ADR-0011, item 2): não-2xx e corpo
-// >8 MiB viram erro, como no Forward.
+// Transport failures and size: a status other than success and a body above the
+// ceiling of eight mebibytes become errors, as in the forwarding path.
 func TestAzureFunctionsConnector_TransportFailures(t *testing.T) {
 	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -297,8 +300,9 @@ func TestAzureFunctionsConnector_TransportFailures(t *testing.T) {
 	}
 }
 
-// Tradução de erro-200 (ADR-0011, item 4): {"status":"error"} vira erro
-// para o gateway reportar CLOUD_FALLBACK_FAILED; desligável por conector.
+// Translation of an error inside a success: a body with an error status becomes an
+// error, so the gateway reports the failure of the fallback, and it can be
+// disabled per connector.
 func TestAzureFunctionsConnector_AppError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"status":"error","message":"imagem inválida"}`))
@@ -318,8 +322,9 @@ func TestAzureFunctionsConnector_AppError(t *testing.T) {
 	}
 }
 
-// Corpo 2xx não-JSON ou sem status error segue como sucesso (o gateway
-// embrulha não-JSON como string, como no Forward).
+// A success body that is not JSON, or that has no error status, stays a success,
+// since the gateway wraps a body that is not JSON as a string, as in the
+// forwarding path.
 func TestAzureFunctionsConnector_NonJSONSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`texto cru`))
@@ -337,9 +342,10 @@ func TestAzureFunctionsConnector_NonJSONSuccess(t *testing.T) {
 	}
 }
 
-// Paridade do GenericHTTPConnector com Forward (ADR-0011, item 5):
-// mesmo input bruto, headers, auth, 2xx bruto; erro-200 do app PASSA
-// como sucesso (sem tradução, como o Forward atual).
+// Parity of the generic connector with the forwarding path, with the same raw
+// input, headers, authentication and raw success body, and with an error inside
+// a success that passes as a success, without the translation, as in the current
+// forwarding path.
 func TestGenericHTTPConnector_Parity(t *testing.T) {
 	var gotBody, gotCT, gotAuth, gotCustom string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -372,7 +378,7 @@ func TestGenericHTTPConnector_Parity(t *testing.T) {
 		t.Fatalf("paridade quebrada: body=%q ct=%q auth=%q custom=%q", gotBody, gotCT, gotAuth, gotCustom)
 	}
 
-	// Com formato por função vigente, o genérico recusa (despacho é do Connector).
+	// With the format per function in force, the generic connector refuses, since the dispatch belongs to the connector.
 	mustSet(t, s, validPerFunctionConfig(srv.URL, srv.URL))
 	if c.Configured() {
 		t.Fatalf("Configured genérico com formato por função deveria ser false")
@@ -382,8 +388,8 @@ func TestGenericHTTPConnector_Parity(t *testing.T) {
 	}
 }
 
-// Despacho por formato (ADR-0011, item 6): o Connector lê o vigente a
-// cada Invoke — PUT troca o caminho sem rewiring.
+// Dispatch by format: the connector reads the format in force on every
+// invocation, so a write swaps the path without any rewiring.
 func TestConnector_Dispatch(t *testing.T) {
 	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("legacy"))

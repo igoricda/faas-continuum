@@ -1,8 +1,9 @@
-// End-to-end de categoria (function-category-routing, todo 11): a ordem da
-// fila preserva o ranking do seletor (borda→névoa→outro, CPU asc) quando o
-// pedido é uma categoria, e a resolução para o concreto por nó não reordena
-// a fila. Complementa gateway_category_test.go (todo 7) que já cobre URLs
-// concretas, recordAttempt por grupo, 503 e 401.
+// End-to-end test of a category: the order of the queue preserves the ranking
+// of the selector, with the edge before the fog before the others and the
+// processor usage ascending, when the request is a category, and the resolution
+// to the concrete variant per node does not reorder the queue. It complements
+// the category test, which covers concrete addresses, the recording per group
+// and the rejection and unauthorized answers.
 package gateway
 
 import (
@@ -16,10 +17,10 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// A fila de uma categoria preserva a ordem do ranking (borda antes de névoa)
-// e a resolução por concreto não a reordena: o primeiro nó (borda, concreto
-// tiny) atende antes do segundo (névoa, concreto full) mesmo quando o pedido
-// é o nome da categoria.
+// The queue of a category preserves the order of the ranking, with the edge
+// before the fog, and the resolution to the concrete variant does not reorder
+// it, so the first node serves before the second even when the request is the
+// name of the category.
 func TestGateway_CategoryQueueOrderPreservedFromRanking(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
@@ -68,7 +69,7 @@ func TestGateway_CategoryQueueOrderPreservedFromRanking(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	// Borda vem primeiro no ranking; o primeiro 200 encerra a fila.
+	// The edge comes first in the ranking, and the first success ends the queue.
 	if len(order) != 1 {
 		t.Fatalf("order=%v want exatamente 1 tentativa (primeiro nó 200)", order)
 	}
@@ -80,8 +81,9 @@ func TestGateway_CategoryQueueOrderPreservedFromRanking(t *testing.T) {
 	}
 }
 
-// A fila de categoria mantém o ranking quando o primeiro nó falha (404
-// obsoleto): borda falha, névoa atende em seguida — ordem preservada.
+// The queue of a category keeps the ranking when the first node fails with a
+// stale not found: the edge fails and the fog serves next, with the order
+// preserved.
 func TestGateway_CategoryRankingPreservedAcrossFailover(t *testing.T) {
 	var mu sync.Mutex
 	var order []string
@@ -139,7 +141,7 @@ func TestGateway_CategoryRankingPreservedAcrossFailover(t *testing.T) {
 	if !strings.HasPrefix(order[0], "borda:") || !strings.HasPrefix(order[1], "nevoa:") {
 		t.Fatalf("ordem do ranking não preservada no failover: %v", order)
 	}
-	// Registro de histórico sob o grupo, nunca o concreto.
+	// The history is recorded under the group, and never under the concrete variant.
 	for _, k := range h.Keys() {
 		if strings.Contains(k, "tiny") || strings.Contains(k, "full") {
 			t.Fatalf("history key %q vazou concreto", k)

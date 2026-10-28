@@ -1,17 +1,18 @@
-// Throughput desacoplado (task-14, estende D18): a vazão só participa de
-// uma decisão quando MinThroughputRPS>0 está declarado no SLO daquela
-// decisão. Este arquivo pina o curto-circuito explícito:
+// Decoupled throughput: the throughput only takes part in a decision when a
+// positive minimum of requests per second is declared in the objective of that
+// decision. This file pins the explicit short circuit:
 //
-//   - SLO só-latência => OrderByFit nunca consulta RecentRPS (candidatos
-//     que diferem SÓ no RPS mantêm a ordem do p95);
-//   - SLO misto (latência+vazão) => ordena por p95, desempate por RPS;
-//   - ThroughputCriterion.Segment sem declarado => (false,false)
-//     (não-aplicável, sem pânico); com declarado => comportamento de antes;
-//   - HardLimit da vazão segue sempre-true.
+//   - an objective with latency only never consults the recent rate, so
+//     candidates that differ only in the rate keep the order of the percentile;
+//   - a mixed objective orders by the percentile and breaks ties by the rate;
+//   - the throughput criterion without a declared minimum reports that it is not
+//     applicable, without a panic, and with a declared minimum it behaves as
+//     before;
+//   - the hard limit of the throughput is always satisfied.
 //
-// OrderByFit é compartilhado pelo QueueSelector (RankNodes) — o
-// desacoplamento continua valendo no único seletor canônico
-// (RiskSelector consome os critérios pelo mesmo par).
+// The ordering by fit is shared by the queue selector, so the decoupling also
+// holds in the single canonical selector, which consumes the criteria through the
+// same pair.
 package selection
 
 import (
@@ -27,7 +28,7 @@ func TestThroughputDecoupled(t *testing.T) {
 
 	t.Run("latency-only OrderByFit ignores RPS", func(t *testing.T) {
 		slo := &SLO{MaxLatencyMS: 5000}
-		// b1 rápido com RPS irrisório; b2 lento com RPS gigante.
+		// The first node is fast with a negligible rate, and the second is slow with a huge rate.
 		segs := map[string]SegmentStats{
 			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.01},
 			"b2": {Count: 20, P95LatencyMS: 300, RecentRPS: 500},
@@ -36,7 +37,7 @@ func TestThroughputDecoupled(t *testing.T) {
 		if len(out) != 2 || out[0].NodeID != "b1" || out[1].NodeID != "b2" {
 			t.Fatalf("SLO só-latência deveria ordenar por p95 ignorando RPS, obteve %v", nodeIDs(out))
 		}
-		// Invertido: lento com RPS gigante continua por último.
+		// Inverted: the slow node with the huge rate still comes last.
 		segsInv := map[string]SegmentStats{
 			"b1": {Count: 20, P95LatencyMS: 300, RecentRPS: 500},
 			"b2": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.01},
@@ -71,7 +72,7 @@ func TestThroughputDecoupled(t *testing.T) {
 		if len(out) != 2 || out[0].NodeID != "b1" {
 			t.Fatalf("empate no p95 deveria desempatar por RPS, obteve %v", nodeIDs(out))
 		}
-		// p95 domina: rápido com RPS baixo vence lento com RPS alto.
+		// The percentile dominates, so the fast node with a low rate wins over the slow node with a high rate.
 		untied := map[string]SegmentStats{
 			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.5},
 			"b2": {Count: 20, P95LatencyMS: 300, RecentRPS: 50},

@@ -1,9 +1,9 @@
 package server
 
-// Regressão do grupo gateway/server da auditoria 2026-09-17 (adendo
-// ADR-0008 2026-09-17): AUD-24 (limiter dedicado do late), AUD-29 (clock
-// injetável no server), AUD-40 (202 aplicado / 208 dedup / 503 sem
-// gateway no late-report).
+// Regression group of the gateway and the server from the audit: the dedicated
+// limiter of the late report, the injectable clock in the server and the
+// application of the status, of the deduplication and of the rejection without a
+// gateway in the late report.
 
 import (
 	"net/http"
@@ -19,7 +19,7 @@ import (
 	"github.com/igoricda/faas-continuum/internal/auth"
 )
 
-// mkLateServer monta servidor com tokens p/ node1 e gw com histórico.
+// mkLateServer builds a server with the tokens of the node and a gateway with a history.
 func mkLateServer(t *testing.T) (*Server, http.Handler, string) {
 	t.Helper()
 	ns, _ := nodes.NewNodeStore("")
@@ -58,7 +58,7 @@ func mkLateReport() gateway.LateReport {
 	}
 }
 
-// Cenário AUD-40: 202 no aplicado, 208 no dedup, 503 sem gateway.
+// Scenario of the statuses: the applied report gives an accepted answer, the duplicate gives the already reported one and the report without a gateway is rejected.
 func TestAuditFix_LateReportStatuses(t *testing.T) {
 	_, h, plain := mkLateServer(t)
 
@@ -79,8 +79,8 @@ func TestAuditFix_LateReportStatuses(t *testing.T) {
 	}
 }
 
-// Cenário AUD-24: esgotar o limiter de nós (600/min por IP) não pode
-// derrubar o late-report — cota isolada.
+// Scenario of the dedicated limiter: exhausting the limiter of the nodes cannot
+// bring down the late report, since it has its own quota.
 func TestAuditFix_LateLimiterIsolatedFromNodeLimiter(t *testing.T) {
 	_, h, plain := mkLateServer(t)
 
@@ -95,7 +95,7 @@ func TestAuditFix_LateLimiterIsolatedFromNodeLimiter(t *testing.T) {
 	if rr.Code != http.StatusTooManyRequests {
 		t.Fatalf("telemetria 601ª status=%d want 429", rr.Code)
 	}
-	// Late-report segue aceito: limiter dedicado, não contaminado.
+	// The late report is still accepted, since the limiter is dedicated and not contaminated.
 	rr = doReq(t, h, http.MethodPost, "/internal/late-report", mkLateReport(), plain)
 	if rr.Code == http.StatusTooManyRequests {
 		t.Fatalf("late-report com 429 após esgotar limiter de nós (cota compartilhada?)")
@@ -105,8 +105,9 @@ func TestAuditFix_LateLimiterIsolatedFromNodeLimiter(t *testing.T) {
 	}
 }
 
-// Cenário AUD-29 (parte server): clock injetável governa DerivedStatus —
-// com clock 10min no futuro, nó recém-registrado aparece indisponivel.
+// Scenario of the injectable clock, in the server: the clock governs the derived
+// status, so with a clock ten minutes in the future a node that was just
+// registered appears unavailable.
 func TestAuditFix_ServerClockDrivesDerivedStatus(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	mon := monitor.NewMonitor()

@@ -21,8 +21,8 @@ import (
 type NoConfig struct {
 	NodeID       string
 	Layer        string
-	Funcs        map[string]string // função concreta -> categoria
-	MaxInstances map[string]int    // função concreta -> teto (0 = aberto)
+	Funcs        map[string]string // concrete function to category
+	MaxInstances map[string]int    // concrete function to ceiling, where zero is open
 	QueueCap     int
 	SpawnDelay   time.Duration
 }

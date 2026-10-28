@@ -1,12 +1,13 @@
 package history
 
-// Cobertura do sinal de confiabilidade (taxa de sucesso Laplace) e do p95 com
-// janela: Total conta SÓ sucesso+falha+timeout de função na janela —
-// orcamento_excedido, rejeicao_capacidade e timeout_admissao são saturação e
-// ficam fora, no contador Saturation; NodeSaturation é o subconjunto com o NÓ
-// como autor (rejeicao + timeout de admissão), consumido pelo piso de
-// absolvição (plano-sinal-saturacao-selflearning D1/D3) — p95 ignora dado
-// stale, e VetoByRate morde com Count==0.
+// Coverage of the reliability signal, which is the smoothed success rate, and of
+// the percentile with a window: the total counts only the successes, the
+// failures and the function timeouts inside the window, while the exceeded
+// budget, the capacity rejection and the admission timeout are saturation and
+// stay out, in the saturation counter. The node saturation is the subset where
+// the node is the author, which is the rejection and the admission timeout, and
+// it is consumed by the floor of absolution. The percentile ignores a stale
+// value, and the veto by rate bites when the count is zero.
 
 import (
 	"testing"
@@ -88,10 +89,11 @@ func TestStatsAndRecentWindowedP95AndRate(t *testing.T) {
 	if recent != 1 {
 		t.Fatalf("recent=%d, esperado 1 (só sucesso fresco)", recent)
 	}
-	// Total mede CONFIABILIDADE: 1 sucesso + 5 falhas + 1 timeout de função
-	// = 7. Os 3 orcamento_excedido são saturação (o árbitro desistiu) e vão
-	// para Saturation — entrou na taxa até a emenda D1, e foi o que fez o
-	// veto banir o nó saturado.
+	// The total measures reliability: one success, five failures and one function
+	// timeout give seven. The three exceeded budgets are saturation, since the
+	// arbiter gave up, and go to the saturation counter: they entered the rate
+	// before the separation, and that is what made the veto ban the saturated
+	// node.
 	if total != 7 {
 		t.Fatalf("total=%d, esperado 7 (orcamento_excedido é saturação, não serviço)", total)
 	}
@@ -110,10 +112,10 @@ func TestStatsAndRecentWindowedP95AndRate(t *testing.T) {
 	}
 }
 
-// Regressão D1 (campanha arb4-*): um segmento cujas ÚNICAS não-amostras de
-// serviço são de saturação NÃO pode ser vetado. Foi assim que o nó mais
-// rápido do sistema (névoa, 48-60 ms) ficou vetado em todos os buckets: 97
-// amostras, 0 acertos, todas de saturação.
+// Regression of the separation: a segment whose only service samples are
+// saturation cannot be vetoed. The fastest node of the system was vetoed in
+// every bucket with ninety-seven samples and no success, all of them from
+// saturation.
 func TestSaturationOnlySegmentIsNotVetoed(t *testing.T) {
 	h, err := NewHistory("", 1000)
 	if err != nil {
@@ -127,9 +129,9 @@ func TestSaturationOnlySegmentIsNotVetoed(t *testing.T) {
 			t.Fatalf("AppendWithGroup(%s): %v", outcome, err)
 		}
 	}
-	// 60 recusas honestas + 37 cortes de orçamento: o nó está saturado,
-	// nunca indisponível. Só as 60 recusas são saturação DO NÓ
-	// (NodeSaturation); o corte de orçamento é decisão do árbitro.
+	// Sixty honest refusals and thirty-seven budget cuts: the node is saturated
+	// and never unavailable. Only the refusals are saturation of the node, since
+	// the budget cut is a decision of the arbiter.
 	for i := 0; i < 60; i++ {
 		add(OutcomeRejeicaoCapacidade)
 	}
@@ -154,8 +156,9 @@ func TestSaturationOnlySegmentIsNotVetoed(t *testing.T) {
 	}
 }
 
-// O outro lado da separação: falha de serviço real CONTINUA vetando, mesmo
-// com saturação misturada. Sem isto, o reparo do D1 viraria "nada mais veta".
+// The other side of the separation: a real service failure still vetoes, even
+// with the saturation mixed in. Without this the repair would become a rule
+// where nothing ever vetoes.
 func TestServiceFailureStillVetoesWithSaturation(t *testing.T) {
 	h, err := NewHistory("", 1000)
 	if err != nil {

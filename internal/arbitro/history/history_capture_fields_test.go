@@ -1,9 +1,9 @@
 package history
 
-// Captura do conjunto completo de medição por invocação
-// (selflearning-consistency-fixes, todo 7, C6/D21): os sete campos
-// aditivos/omitempty da Entry persistida fazem round-trip JSON e somem
-// quando zero (sem migração — arquivo antigo decodifica como zero).
+// Capture of the complete measurement set per invocation: the seven additive
+// fields of the persisted entry, which are omitted when zero, survive the JSON
+// round trip and disappear when zero, with no migration, so an old file decodes
+// as zero.
 
 import (
 	"encoding/json"

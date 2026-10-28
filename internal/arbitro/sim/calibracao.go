@@ -88,7 +88,7 @@ func LoadCalibracao(path string, severidade float64) (*Calibracao, error) {
 		}
 		var r linhaInvLog
 		if err := json.Unmarshal([]byte(ln), &r); err != nil {
-			continue // linha parcial/legada: calibração é best-effort
+			continue // partial or legacy line: the calibration is best-effort
 		}
 		switch r.NodeID {
 		case "cloud-fallback":
@@ -213,7 +213,7 @@ func (c *Calibracao) Servico(no, cat string, k int, rng *rand.Rand) time.Duratio
 		pSlow = 0.95
 	}
 	if k <= 1 && pSlow > 0.05 {
-		pSlow = 0.05 // 1ª execução isolada raramente estoura (bateria com priming)
+		pSlow = 0.05 // an isolated first execution rarely exceeds the budget, since the batch is primed
 	}
 	if rng.Float64() < pSlow && len(cens) > 0 {
 		piso := cens[rng.Intn(len(cens))]

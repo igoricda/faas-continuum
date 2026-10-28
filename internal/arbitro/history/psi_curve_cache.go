@@ -9,13 +9,13 @@
 //
 // Cache discipline mirrors ExpectedCost EXACTLY (history_stats.go,
 // costCacheEntry + costGen in history_store.go) — one pattern, not two:
-//   - same mutex (h.mu), same generation map (h.costGen, key grupo\x00nó),
+//   - same mutex (h.mu), same generation map (h.costGen, key group\x00node),
 //     same cap (maxExpCostCacheEntries=1024, recreate-on-overflow),
 //     same invalidation trigger points (appendLocked/Supersede bump the
 //     pair gen; agg fan-out appends pass pair=="" and never bump, exactly
 //     as ExpectedCost ignores agg keys).
 //   - cache key extends the pair with the layer suffix
-//     (grupo\x00nó\x00camada); invalidation stays per-pair via the stored
+//     (group\x00node\x00layer); invalidation stays per-pair via the stored
 //     gen — any append to the pair bumps costGen[pair] and all layer
 //     variants of that pair miss on the next query.
 //   - same time-exactness guards (computedAt/newest/futureFrom/oldest +
@@ -25,7 +25,7 @@
 //     move — no I/O under lock anywhere.
 //
 // Prior staleness note: the layer prior pools entries from every node in
-// (grupo,camada), but invalidation fires only on appends to the QUERIED
+// (group,layer), but invalidation fires only on appends to the QUERIED
 // pair — appends by sibling nodes that move the prior do NOT invalidate
 // this pair's entry (same trade-off class as a pooled read under a
 // per-pair gen; the next append to this pair, or window/time-guard expiry,
@@ -83,14 +83,14 @@ func psiPointOfEntry(e Entry) PSIPoint {
 }
 
 // psiCacheEntry is the memoized PSICurveFor result for ONE
-// (grupo,nó,camada) key, shaped exactly like costCacheEntry: the fitted
-// posterior `curve`/`ok` computed at `gen` (costGen of the grupo\x00nó
+// (group,node,layer) key, shaped exactly like costCacheEntry: the fitted
+// posterior `curve`/`ok` computed at `gen` (costGen of the group\x00node
 // pair) and instant `computedAt`. `oldest` = smallest Timestamp INCLUDED
 // from the union of prior+local scans; `newest` = largest Timestamp of ANY
 // entry examined in either scan; `futureFrom` = smallest Timestamp among
 // solo+PSI-eligible entries with ts > computedAt (future-relative).
 // Reuse rules are the ExpectedCost ones verbatim (see costCacheEntry).
-// ordem 8B.
+// aligned to eight bytes.
 type psiCacheEntry struct {
 	computedAt time.Time
 	oldest     time.Time
@@ -102,10 +102,10 @@ type psiCacheEntry struct {
 	ok         bool
 }
 
-// PSICurveFor fits the pooled PSI pressure curve for (grupo,nó): the layer
+// PSICurveFor fits the pooled PSI pressure curve for (group,node): the layer
 // prior over solo-only PSI>0 samples in-window across ALL buckets of
-// (grupo,camada) — read through the AggLayerKey fan-out segments — plus
-// the node-local posterior over (grupo,nó) shrunk to that prior
+// (group,layer) — read through the AggLayerKey fan-out segments — plus
+// the node-local posterior over (group,node) shrunk to that prior
 // (PosteriorPSICurve: thin nodes stay glued to the prior until
 // SoloN>=PSIMinClassSamples).
 //

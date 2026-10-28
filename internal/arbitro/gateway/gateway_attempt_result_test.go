@@ -1,15 +1,15 @@
 package gateway
 
-// Tabela status→classe do Passo 4.2 (adendo 2026-09-30): trava o refactor
-// que extraiu readAttemptResult/classifyAttemptResult do closure do dispatch.
-// Cada linha fixa kind + failure (status/code/retryable) + classe do
-// attemptErr + reason/pressure.
+// Table from status to class: it locks the refactor that extracted the reading
+// and the classification of the result from the closure of the dispatch. Each
+// row pins the kind, the failure, with the status, the code and the retryable
+// flag, the class of the attempt error and the reason with the pressure.
 //
-// Gate test-audit: protege o mapeamento (contrato comportamental extraído,
-// não a forma do código). Regressão crível: drift no switch durante o
-// refactor (ex.: ramo 504 que perde a pressão — pego por este teste na
-// extração). TestClassifyAttempt cobre err→outcome, não status→classe
-// (sem duplicação). Sem seam novo (funções puras, entradas sintéticas).
+// The mapping is a behavioral contract, so a credible regression is a drift in
+// the switch during a refactor, for instance a timed out branch that loses the
+// pressure. The classification of an error into an outcome is covered by its
+// own test, which does not duplicate this table, and the functions are pure over
+// synthetic inputs.
 import (
 	"bytes"
 	"errors"
@@ -329,9 +329,9 @@ func (c *closeTracker) Close() error {
 	return nil
 }
 
-// readAttemptResult preserva o enquadramento do caminho legado: 2xx até
-// 8MiB+1 com métricas, erro até 64KiB+1 verbatim para o parse de código, e o
-// corpo sempre fechado.
+// readAttemptResult preserves the framing of the legacy path: a success up to
+// the ceiling plus one byte with the metrics, an error up to the ceiling plus one
+// byte verbatim for the parse of the code, and the body always closed.
 func TestReadAttemptResultFraming(t *testing.T) {
 	newResp := func(status int, body []byte) (*http.Response, *closeTracker) {
 		ct := &closeTracker{Reader: bytes.NewReader(body)}

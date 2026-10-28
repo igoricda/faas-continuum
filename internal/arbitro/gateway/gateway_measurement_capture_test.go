@@ -1,11 +1,12 @@
 package gateway
 
-// Captura do conjunto completo de medição por invocação
-// (selflearning-consistency-fixes, todo 7, C6/D21): peak de CPU e memória,
-// fases (acquire_wait/readiness/function) e ocupação do pool do CONCRETO
-// resolvido (queue_depth/instances_available) viram campos da Entry de
-// histórico, herdados pelo late via liveRef. Capture-only: nenhum consumo em
-// decisão (guards/ordering/p95/ExpectedCost intocados).
+// Capture of the complete measurement set per invocation: the peak of the
+// processor and of the memory usage, the stages of the acquisition, of the
+// readiness and of the function, and the occupancy of the pool of the resolved
+// concrete variant become fields of the history entry, inherited by the late
+// report through the live reference. It is capture only, with no consumer in
+// any decision, so the guards, the ordering, the percentile and the expected
+// cost stay untouched.
 
 import (
 	"encoding/json"
@@ -19,8 +20,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// fullMeasurementMetrics é o payload execution_metrics verbatim de um nó com
-// perfil de recursos, fases e capacidade piggyback da variante concreta.
+// fullMeasurementMetrics is the blob of execution metrics verbatim from a node
+// with a resource profile, the stages and the capacity of the concrete variant.
 const fullMeasurementMetrics = `{
 	"cold_start": false,
 	"instance_id": "cat-v1-1",
@@ -138,8 +139,9 @@ func TestResourceProfilePeakMemTolerant(t *testing.T) {
 	}
 }
 
-// TestRecordAttemptCapturesFullMeasurementSet prova que um 2xx síncrono com
-// perfil/fases/capacidade preenche TODOS os sete campos novos da Entry.
+// TestRecordAttemptCapturesFullMeasurementSet proves that a synchronous success
+// with a profile, the stages and the capacity fills all seven new fields of the
+// entry.
 func TestRecordAttemptCapturesFullMeasurementSet(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	h, err := history.NewHistory("", 100)
@@ -177,8 +179,8 @@ func TestRecordAttemptCapturesFullMeasurementSet(t *testing.T) {
 	}
 }
 
-// TestRecordAttemptCapacityFromConcreteKey prova que a ocupação capturada vem
-// da chave CONCRETA (captured.concrete), nunca do nome pedido.
+// TestRecordAttemptCapacityFromConcreteKey proves that the captured occupancy
+// comes from the concrete key, and never from the requested name.
 func TestRecordAttemptCapacityFromConcreteKey(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -226,8 +228,8 @@ func TestRecordAttemptCapacityFromConcreteKey(t *testing.T) {
 	}
 }
 
-// TestRecordAttemptMeasurementsAbsentOrErrZeros cobre o decode tolerante e a
-// guarda err!=nil da captura de capacidade.
+// TestRecordAttemptMeasurementsAbsentOrErrZeros covers the tolerant decoding
+// and the guard of the capture of the capacity on an error.
 func TestRecordAttemptMeasurementsAbsentOrErrZeros(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -255,9 +257,9 @@ func TestRecordAttemptMeasurementsAbsentOrErrZeros(t *testing.T) {
 			wantAllZero: true,
 		},
 		{
-			// err != nil: phases/peak ainda decodificam (o decode não é
-			// guardado por err), mas a ocupação do pool NÃO é capturada
-			// (capacity read é guardada por err==nil).
+			// On an error the stages and the peak still decode, since the decoding
+			// is not gated by the error, while the occupancy of the pool is not
+			// captured, since the capacity reading is gated by a nil error.
 			name:         "capacity-present-with-error-not-captured",
 			metrics:      []byte(fullMeasurementMetrics),
 			err:          errors.New("boom"),
@@ -298,9 +300,9 @@ func TestRecordAttemptMeasurementsAbsentOrErrZeros(t *testing.T) {
 	}
 }
 
-// TestLateSupersedeInheritsCapturedMeasurements prova que o late do MESMO
-// attempt herda os sete campos capturados no dispatch via liveRef (o fio do
-// late não carrega nenhum deles).
+// TestLateSupersedeInheritsCapturedMeasurements proves that the late report of
+// the same attempt inherits the seven fields captured at the dispatch through
+// the live reference, since the wire of the late report carries none of them.
 func TestLateSupersedeInheritsCapturedMeasurements(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	h, err := history.NewHistory("", 100)

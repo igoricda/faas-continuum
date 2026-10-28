@@ -1,5 +1,6 @@
-// BLR conjugate Normal-Gamma posterior — see blr_model.go for overview.
-// Pure stdlib, no locks/I-O (ADR-0007 D32).
+// Conjugate Normal-Gamma posterior of the Bayesian linear regression. See
+// blr_model.go for the overview. It uses only the standard library, without
+// locks or input and output.
 package history
 
 // blrPosterior is the conjugate Normal-Gamma posterior: posterior mean

@@ -1,12 +1,12 @@
 package selection
 
-// Leitura de capacidade pelo CONCRETO resolvido (selflearning-consistency-fixes,
-// todo 6, C2/D17): os estágios de capacidade (marca otimista e cold prediction)
-// consultam o Monitor pela MESMA chave concreta que o produtor (nodeapi) usa —
-// a variante física resolvida por nó —, nunca o nome pedido (categoria). O
-// estágio é compartilhado; estes testes o exercitam via RiskSelector, o
-// seletor canônico (ADR-0012), com learner semeado para tirar os nós de
-// probation e deixar a ordenação cold/warm decidir.
+// Capacity reading by the resolved concrete variant: the capacity stages, which
+// are the optimistic mark and the cold prediction, consult the monitor by the
+// same concrete key that the producer uses, which is the physical variant
+// resolved per node, and never by the requested name, which may be a category.
+// The stage is shared, and these tests exercise it through the risk selector, the
+// canonical selector, with a seeded learner that takes the nodes out of the
+// probation and lets the cold and warm ordering decide.
 
 import (
 	"slices"
@@ -26,9 +26,10 @@ func capacityConcreteFixture() []nodes.Node {
 	}
 }
 
-// capacityConcreteSelector monta o RiskSelector com learner semeado (10
-// sucessos idênticos por nó, M=1): n_eff >= nmin => nós viáveis, e a ordem
-// cold-primeiro-do-warm passa a valer.
+// capacityConcreteSelector builds the risk selector with a seeded learner, with
+// ten identical successes per node: the effective number of samples reaches the
+// minimum, so the nodes are viable, and the order that puts a cold node first
+// applies.
 func capacityConcreteSelector(mon *monitor.Monitor, now time.Time) *RiskSelector {
 	cfg := DefaultRiskConfig()
 	cfg.Band = 0
@@ -48,17 +49,18 @@ func capacityConcreteSelector(mon *monitor.Monitor, now time.Time) *RiskSelector
 	}
 }
 
-// (a) Categoria `cat`: A reporta o concreto cat-v1 com avail==0 fresco (sem
-// marca => genuine-cold); B (cat-v2) está warm. Com a chave concreta o cold
-// de A é detectado: no RiskSelector o cold ordena por último entre viáveis
-// e, sem modelo cold semeado, A cai em probation — nos dois casos A vem
-// depois de B, mesmo com CPU menor.
+// (a) In the category the first node reports its concrete variant with no
+// available instance and a fresh reading, which is a genuine cold start, while
+// the second node is warm. With the concrete key the cold start of the first node
+// is detected: in the risk selector a cold node is ordered last among the viable
+// ones and, without a seeded cold model, it falls into the probation, so in both
+// cases it comes after the second node even with a lower processor usage.
 func TestSelectCategoryCapacityConcreteKeyingDemotesCold(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()
 	mon.UpdateCapacity("A", "cat-v1", telemetry.FunctionCapacity{MaxInstances: 1, InstancesAvailable: 0}, now)
 	mon.UpdateCapacity("B", "cat-v2", telemetry.FunctionCapacity{MaxInstances: 2, InstancesAvailable: 2}, now)
-	// CPU: A menor que B — sem cold detection, A venceria a ordenação.
+	// The processor usage of the first node is lower, so without the cold detection it would win the ordering.
 	mon.UpdateAt(telemetry.Package{NodeID: "A", CPUUsagePct: 10}, now)
 	mon.UpdateAt(telemetry.Package{NodeID: "B", CPUUsagePct: 50}, now)
 
@@ -68,9 +70,10 @@ func TestSelectCategoryCapacityConcreteKeyingDemotesCold(t *testing.T) {
 	}
 }
 
-// (b) A marca de exaustão do concreto cat-v1 NÃO é limpa por um
-// UpdateCapacity numa chave diferente (cat-v2): A segue filtrado. Sem a
-// chave concreta o read usa `cat` e nem enxerga a marca do concreto.
+// (b) The exhaustion mark of the first concrete variant is not cleared by a
+// capacity update on a different key, which is the second variant, so the first
+// node stays filtered. Without the concrete key the reading uses the category and
+// does not even see the mark of the concrete variant.
 func TestSelectCategoryCapacityConcreteMarkDifferentKeyStillFilters(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()
@@ -84,8 +87,9 @@ func TestSelectCategoryCapacityConcreteMarkDifferentKeyStillFilters(t *testing.T
 	}
 }
 
-// (c) UpdateCapacity fresco na MESMA chave concreta limpa a marca: A não é
-// filtrado por 30s (sem filtragem stale).
+// (c) A fresh capacity update on the same concrete key clears the mark, so the
+// first node is not filtered for thirty seconds, since there is no filtering of a
+// stale reading.
 func TestSelectCategoryCapacityConcreteMarkClearedByFreshUpdate(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	mon := monitor.NewMonitor()

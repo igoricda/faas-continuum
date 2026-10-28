@@ -1,9 +1,8 @@
 package server
 
-// Teste de resumo agrupado por grupo (function-category-routing, todo 6):
-// duas variantes sob o mesmo grupo resolvido aparecem UMA vez no
-// history_summary (chave de grupo); categoria fria não aparece e não
-// causa panic.
+// Test of the summary grouped by group: two variants under the same resolved
+// group appear once in the summary of the history, under the key of the group,
+// and a cold category does not appear and does not cause a panic.
 
 import (
 	"encoding/json"
@@ -50,7 +49,7 @@ func TestHistorySummaryGroupsByResolvedGroup(t *testing.T) {
 		t.Fatalf("POST /nodes: status=%d, want 201", rr.Code)
 	}
 
-	// Duas variantes, um grupo: uma única chave de segmento no resumo.
+	// Two variants and one group give a single segment key in the summary.
 	sc := history.ScenarioContext{LoadBucket: history.Bucket0_10}
 	mk := func(requested string) history.Entry {
 		return history.Entry{FunctionName: requested, NodeID: "n1", Timestamp: now, ScenarioContext: sc, ObservedLatencyMS: 100, Outcome: history.OutcomeSucesso}

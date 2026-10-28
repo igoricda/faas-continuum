@@ -28,10 +28,11 @@ func lateTestGateway(hist *history.History, mon *monitor.Monitor, clock func() t
 	return NewGatewayWithHistory(GatewayConfig{Nodes: ns, Monitor: mon, Selector: selection.QueueSelector{Mon: mon, Cfg: defaultLimits}, History: hist, Clock: clock})
 }
 
-// TestLateSupersedesLiveSameAttempt cobre o AUD-02: o attempt estoura o
-// budget (live grava timeout com latência truncada) e o nó conclui depois
-// (late grava sucesso com a latência real). Sem supersede, 1 execução conta
-// 2x em Count/p95; com supersede, conta 1x com os dados reais.
+// TestLateSupersedesLiveSameAttempt covers an attempt that exceeds the budget,
+// where the live path records a timeout with a truncated latency, and the node
+// concludes later, where the late report records a success with the real latency.
+// Without the supersede a single execution counts twice in the count and in the
+// percentile, and with it the execution counts once with the real data.
 func TestLateSupersedesLiveSameAttempt(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -50,14 +51,15 @@ func TestLateSupersedesLiveSameAttempt(t *testing.T) {
 	node := nodes.Node{NodeID: "n1", Layer: nodes.LayerBorda, Host: "h"}
 	slo := &selection.SLO{MaxLatencyMS: 5000}
 	gw.RegisterLateGroup("req-live", "f", slo)
-	// Live: timeout do budget, latência truncada 200ms.
+	// Live: the budget timed out, with a truncated latency of two hundred milliseconds.
 	gw.recordAttempt(node, 200*time.Millisecond, context.DeadlineExceeded, slo, "f", "f", nil, true, "req-live", 1, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
 
 	key := history.SegmentKey("f", "n1", history.ScenarioContext{LoadBucket: history.BucketUnknown})
-	// Interação AUD-01×AUD-02: o live timeout é gravado no segmento (dado
-	// de treino, supersedível pelo late), mas Count/p95 exigem sucesso
-	// (p95-sobre-sucessos) — segmento segue !ready até o late chegar.
-	// Fan-out por camada: nó borda grava primária + agregada => 2 chaves.
+	// The live timeout is recorded in the segment as training data, which the late
+	// report may supersede, but the count and the percentile require a success, so
+	// the segment stays unready until the late report arrives. The fan-out by layer
+	// records the primary key and the aggregated key of the edge, which gives two
+	// keys.
 	if len(hist.Keys()) != 2 {
 		t.Fatalf("live: keys=%d, want 2 (primária + agregada por layer)", len(hist.Keys()))
 	}
@@ -65,7 +67,7 @@ func TestLateSupersedesLiveSameAttempt(t *testing.T) {
 		t.Fatalf("live: count=%d ok=%v, want 0 false (timeout fora do Count)", count, ok)
 	}
 
-	// Late: sucesso com a latência real 3200ms.
+	// Late: a success with the real latency of thirty-two hundred milliseconds.
 	rep := LateReport{
 		RequestID:         "req-live",
 		AttemptN:          1,
@@ -93,7 +95,7 @@ func TestLateSupersedesLiveSameAttempt(t *testing.T) {
 		t.Errorf("recent=%d, want 1", recent)
 	}
 
-	// SloMet derivado (AUD-03): sucesso 3200ms dentro do SLO 5000ms => true.
+	// The objective flag is derived from the latency: a success within the objective is met.
 	raw, err := os.ReadFile(logPath)
 	if err != nil {
 		t.Fatal(err)
@@ -114,11 +116,11 @@ func TestLateSupersedesLiveSameAttempt(t *testing.T) {
 	}
 }
 
-// TestLateDoubleSuccessCountedOnce é a regressão forte do AUD-02: se o
-// live e o late do mesmo attempt gravassem 2 Entries de sucesso, Count,
-// p95 e RecentRPS dobrariam (MinSamples 2x mais rápido). Com supersede,
-// 1 execução conta 1x com os dados reais do late. Falha sem o fix
-// (contaria 2).
+// TestLateDoubleSuccessCountedOnce is the strong regression of the supersede: if
+// the live path and the late report of the same attempt recorded two successful
+// entries, the count, the percentile and the recent rate would double and the
+// segment would become ready twice as fast. With the supersede a single execution
+// counts once with the real data of the late report.
 func TestLateDoubleSuccessCountedOnce(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -130,10 +132,9 @@ func TestLateDoubleSuccessCountedOnce(t *testing.T) {
 	node := nodes.Node{NodeID: "n1", Layer: nodes.LayerBorda, Host: "h"}
 	slo := &selection.SLO{MaxLatencyMS: 5000}
 	gw.RegisterLateGroup("req-dup", "f", slo)
-	// Live: sucesso com latência truncada 50ms (budget estourou na borda
-	// do SLO, mas a Entry síncrona existe para este attempt).
+	// Live: a success with a truncated latency of fifty milliseconds, since the budget expired at the edge of the objective.
 	gw.recordAttempt(node, 50*time.Millisecond, nil, slo, "f", "f", nil, true, "req-dup", 1, attemptCapture{sc: history.ScenarioFrom(telemetry.Package{}, false)})
-	// Late: o mesmo attempt concluiu com a latência real 3200ms.
+	// Late: the same attempt concluded with the real latency of thirty-two hundred milliseconds.
 	rep := LateReport{
 		RequestID:         "req-dup",
 		AttemptN:          1,
@@ -163,9 +164,9 @@ func TestLateDoubleSuccessCountedOnce(t *testing.T) {
 	}
 }
 
-// TestLateSloMetFalseWhenOverSLO cobre a outra perna do AUD-03: sucesso
-// tardio acima do SLO deriva SloMet=false (antes era false fixo para tudo,
-// inclusive sucesso dentro do SLO).
+// TestLateSloMetFalseWhenOverSLO covers the other half: a late success above
+// the objective derives an unmet objective, while before the flag was false for
+// everything, including a success within the objective.
 func TestLateSloMetFalseWhenOverSLO(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -207,9 +208,9 @@ func TestLateSloMetFalseWhenOverSLO(t *testing.T) {
 	}
 }
 
-// TestConcurrentDuplicateLate cobre o AUD-25: retry do nó (resposta do 1º
-// POST perdida, late_sender reenvia) com N RecordLate concorrentes do mesmo
-// par só pode gravar 1x. Exige -race no pacote.
+// TestConcurrentDuplicateLate covers a retry of the node, where the answer of the
+// first post is lost and the sender repeats it, with several concurrent reports
+// of the same pair, which have to record only once. It requires the race detector.
 func TestConcurrentDuplicateLate(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -257,9 +258,9 @@ func TestConcurrentDuplicateLate(t *testing.T) {
 	}
 }
 
-// TestLateTrainsRealSegment cobre o AUD-03: o late treina o segmento com os
-// buckets reais do nó (legível pelo Select), não unknown/unknown; pct no
-// relatório tem precedência sobre a telemetria.
+// TestLateTrainsRealSegment covers the training of the real segment: the late
+// report trains the buckets of the node, which the selection can read, and never
+// the unknown ones, and the percentile of the report wins over the telemetry.
 func TestLateTrainsRealSegment(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -291,7 +292,7 @@ func TestLateTrainsRealSegment(t *testing.T) {
 		t.Errorf("AUD-03: late caiu em unknown/unknown, want só segmento real")
 	}
 
-	// Relatório com pct próprio vence a telemetria do monitor.
+	// A report with its own percentile wins over the telemetry of the monitor.
 	rep2 := rep
 	rep2.RequestID = "req-override"
 	rep2.CPUUsagePct = f64ptr(80)
@@ -303,8 +304,8 @@ func TestLateTrainsRealSegment(t *testing.T) {
 		t.Errorf("pct do relatório deveria vencer: count=%d ok=%v, want 1 true", count, ok)
 	}
 
-	// Legível pelo Select: o histórico real (alimentado pelo late) deixa o
-	// nó viável/probation no RiskSelector — o nó segue selecionável.
+	// Readable by the selector: the real history, fed by the late report, leaves
+	// the node viable in the probation of the risk selector, so it stays selectable.
 	sel := &selection.RiskSelector{
 		Base:             selection.QueueSelector{Mon: mon, Cfg: defaultLimits},
 		Hist:             hist,
@@ -326,10 +327,10 @@ func TestLateTrainsRealSegment(t *testing.T) {
 	}
 }
 
-// TestLateClockInjectable cobre a parte late do AUD-29: started_at é
-// julgado contra g.clock(), nunca wall. started_at no futuro do clock
-// fake (mas passado no wall) rejeita; no passado do clock fake (mas
-// futuro no wall) aceita.
+// TestLateClockInjectable covers the late half of the injectable clock: the start
+// instant is judged against the clock of the gateway and never against the wall
+// clock, so a start in the future of the fake clock, but in the past of the wall
+// clock, is rejected, while the opposite is accepted.
 func TestLateClockInjectable(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {

@@ -1,13 +1,14 @@
 package selection
 
-// Hard-limits POR NÓ (arbitro.node_limits → LimitsConfig.PerNode).
+// Hard limits per node, configured under the node limits of the arbiter and
+// resolved into the per-node map of the limits.
 //
-// O contrato protegido aqui é o do crivo de sobrecarga: cada nó é julgado
-// pelo SEU trio, com fallback silencioso para o global quando não há
-// override. O escopo é deliberadamente estreito — estatística, previsão,
-// ordenação e veto do self-learning não consultam PerNode, e o crivo
-// reativo de sobrecarga é compartilhado pelos dois modos de seleção
-// (ADR-0007, adendo 2026-09-28 b).
+// The contract protected here is that of the overload filter: each node is
+// judged by its own trio, with a silent fallback to the global values when
+// there is no override. The scope is deliberately narrow, since the statistics,
+// the prediction, the ordering and the veto of the self-learning never consult
+// the per-node map, and the reactive overload filter is shared by both
+// selection modes.
 
 import (
 	"slices"
@@ -17,10 +18,13 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// fixturePerNodeLimits: global 85/90/25 + dois overrides parciais, no
-// formato que cmd/arbitro entrega (trio já resolvido).
-//   - "borda-aperta": só CPU (60) — mem/PSI herdados do global.
-//   - "nevoa-folga": só CPU (95) — acima do global de propósito.
+// fixturePerNodeLimits has a global trio of eighty-five, ninety and twenty-five
+// plus two partial overrides, in the format that the arbiter delivers, with the
+// trio already resolved:
+//   - the tight edge overrides only the processor ceiling, of sixty, and
+//     inherits the memory and pressure ceilings from the global values;
+//   - the loose fog overrides only the processor ceiling, of ninety-five, which
+//     is above the global value on purpose.
 func fixturePerNodeLimits() LimitsConfig {
 	cfg := LimitsConfig{MaxCPUPct: 85, MaxMemPct: 90, MaxPSIAvg10: 25}
 	cfg.PerNode = map[string]LimitsConfig{
@@ -30,12 +34,13 @@ func fixturePerNodeLimits() LimitsConfig {
 	return cfg
 }
 
-// TestLimitsConfigFor cobre a resolução em si: override vence, ausência cai
-// no global, e o resultado é uma cópia degenerada (sem PerNode), então
-// encadear For não pode reintroduzir override de terceiro nível.
+// TestLimitsConfigFor covers the resolution itself: the override wins, the
+// absence falls back to the global value, and the result is a degenerate copy
+// without the per-node map, so chaining the resolution cannot reintroduce an
+// override of a third level.
 //
-// LimitsConfig deixou de ser comparável com `!=` quando ganhou o mapa
-// PerNode, então a asserção compara os três escalares campo a campo.
+// The configuration is no longer comparable with the equality operator since it
+// gained the map, so the assertion compares the three scalars field by field.
 func TestLimitsConfigFor(t *testing.T) {
 	cfg := fixturePerNodeLimits()
 	cases := []struct {
@@ -62,21 +67,23 @@ func TestLimitsConfigFor(t *testing.T) {
 		})
 	}
 
-	// Encadeamento: For de um resultado de For é inócuo (não há mapa para
-	// consultar), então um override nunca "passa adiante".
+	// Chaining: resolving the result of a resolution is innocuous, since there is
+	// no map to consult, so an override never passes further down.
 	if again := cfg.For("borda-aperta").For("nevoa-folga"); again.MaxCPUPct != 60 {
 		t.Fatalf("For.For deveria preservar o trio do primeiro nó, got cpu=%.1f", again.MaxCPUPct)
 	}
 }
 
-// TestFilterOverloadedPerNode é a fronteira dona do recurso: um MESMO
-// snapshot de CPU produz decisões diferentes por nó.
+// TestFilterOverloadedPerNode is the boundary that owns the feature: the same
+// snapshot of processor usage produces different decisions per node.
 //
-// O fixture discrimina nas duas direções, que é o que o torna um guarda de
-// verdade: com o global 85, "borda-aperta" (CPU 70, teto 60) precisa CAIR
-// (sem override sobreviveria) e "nevoa-folga" (CPU 90, teto 95) precisa
-// FICAR (sem override seria derrubada). Uma fixture que só apertasse o
-// teto passaria igual no código pré-recurso para o nó folgado.
+// The fixture discriminates in both directions, which is what makes it a real
+// guard: with the global ceiling of eighty-five, the tight edge, at seventy
+// against its ceiling of sixty, has to fall, since without the override it would
+// survive, and the loose fog, at ninety against its ceiling of ninety-five, has
+// to stay, since without the override it would be dropped. A fixture that only
+// tightened a ceiling would pass the same on the code before the feature for the
+// loose node.
 func TestFilterOverloadedPerNode(t *testing.T) {
 	cfg := fixturePerNodeLimits()
 	candidates := []nodes.Node{
@@ -94,9 +101,10 @@ func TestFilterOverloadedPerNode(t *testing.T) {
 		t.Fatalf("FilterOverloaded per-node = %v, want [borda-comum nevoa-folga]", ids(got))
 	}
 
-	// Sem PerNode (cfg global puro), o MESMO snapshot derruba "nevoa-folga"
-	// e mantém "borda-aperta" — a inversão prova que a diferença vem do
-	// override e não da ordenação/estabilidade do filtro.
+	// Without the per-node map, with the pure global configuration, the same
+	// snapshot drops the loose fog and keeps the tight edge, and the inversion
+	// proves that the difference comes from the override and not from the ordering
+	// or the stability of the filter.
 	globalOnly := LimitsConfig{MaxCPUPct: 85, MaxMemPct: 90, MaxPSIAvg10: 25}
 	got = FilterOverloaded(candidates, latest, globalOnly)
 	if !slices.Equal(ids(got), []string{"borda-aperta", "borda-comum"}) {
@@ -104,13 +112,13 @@ func TestFilterOverloadedPerNode(t *testing.T) {
 	}
 }
 
-// TestFilterOverloadedPerNodeMemPsi garante que não é só a CPU: o override
-// parcial de memória/PSI também decide, e o eixo não declarado continua
-// herdando o global.
+// TestFilterOverloadedPerNodeMemPsi guarantees that the decision is not only
+// about the processor: the partial override of memory and pressure also decides,
+// and an axis that is not declared keeps inheriting the global value.
 func TestFilterOverloadedPerNodeMemPsi(t *testing.T) {
 	cfg := LimitsConfig{MaxCPUPct: 85, MaxMemPct: 90, MaxPSIAvg10: 25}
 	cfg.PerNode = map[string]LimitsConfig{
-		// só memória apertada: CPU e PSI seguem o global.
+		// Only the memory ceiling is tight, so the processor and the pressure follow the global values.
 		"nevoa-mem": {MaxCPUPct: 85, MaxMemPct: 50, MaxPSIAvg10: 25},
 	}
 	candidates := []nodes.Node{{NodeID: "nevoa-mem", Layer: nodes.LayerNevoa}}
@@ -120,17 +128,18 @@ func TestFilterOverloadedPerNodeMemPsi(t *testing.T) {
 	if got := FilterOverloaded(candidates, latest, cfg); len(got) != 0 {
 		t.Fatalf("mem 60 > teto 50 deveria derrubar o nó, got=%v", ids(got))
 	}
-	// mem 45 passa no teto do nó, e CPU 80 continua ok pelo global.
+	// A memory usage of forty-five passes the ceiling of the node, and a processor usage of eighty stays within the global value.
 	latest["nevoa-mem"] = telemetry.Package{CPUUsagePct: 80, MemoryUsagePct: 45}
 	if got := FilterOverloaded(candidates, latest, cfg); len(got) != 1 {
 		t.Fatalf("mem 45 < teto 50 deveria manter o nó, got=%v", ids(got))
 	}
 }
 
-// TestFilterProjectedOverloadedPerNode cobre o hard guard de sobrecarga
-// PROJETADA, que compara com o teto de CPU do próprio nó (o helper é
-// privado porque só os seletores o chamam; o risco de regressão é o
-// threshold fixo no global, que é exatamente o que o fixture exercita).
+// TestFilterProjectedOverloadedPerNode covers the hard guard of the projected
+// overload, which compares against the processor ceiling of the node itself. The
+// helper is private because only the selectors call it, and the risk of a
+// regression is a threshold fixed on the global value, which is exactly what the
+// fixture exercises.
 func TestFilterProjectedOverloadedPerNode(t *testing.T) {
 	cfg := fixturePerNodeLimits()
 	candidates := []nodes.Node{
@@ -139,15 +148,15 @@ func TestFilterProjectedOverloadedPerNode(t *testing.T) {
 		{NodeID: "borda-comum", Layer: nodes.LayerBorda},
 	}
 	projected := map[string]float64{
-		"borda-aperta": 70, // > 60 (teto do nó), < 85 global
-		"nevoa-folga":  90, // < 95 (teto do nó), > 85 global
-		"borda-comum":  70, // abaixo dos dois
+		"borda-aperta": 70, // above the ceiling of the node and below the global one
+		"nevoa-folga":  90, // below the ceiling of the node and above the global one
+		"borda-comum":  70, // below both ceilings
 	}
 	got := filterProjectedOverloaded(candidates, projected, cfg)
 	if !slices.Equal(ids(got), []string{"nevoa-folga", "borda-comum"}) {
 		t.Fatalf("filterProjectedOverloaded per-node = %v, want [borda-comum nevoa-folga]", ids(got))
 	}
-	// Projeção ausente mantém o candidato (nunca pode exceder).
+	// An absent projection keeps the candidate, which can never exceed the ceiling.
 	got = filterProjectedOverloaded(candidates, map[string]float64{}, cfg)
 	if len(got) != len(candidates) {
 		t.Fatalf("sem projeção deveria manter todos, got=%v", ids(got))

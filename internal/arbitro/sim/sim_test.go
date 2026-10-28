@@ -7,11 +7,11 @@ import (
 	"time"
 )
 
-// TestSmokeBancada valida o encanamento da bancada ponta a ponta com o
-// invocation.jsonl REAL da sessão (pula se o fixture não existir nesta
-// máquina). Não é uma asserção de política — é guarda de infraestrutura:
-// mocks sobem, o gateway real aceita carga, a nuvem responde e as métricas
-// saem consistentes.
+// TestSmokeBancada validates the wiring of the bench end to end with the real
+// invocation log of the session, and it is skipped when the fixture is not
+// present. It is not an assertion of policy but a guard of the infrastructure:
+// the mocks start, the real gateway accepts the load, the cloud answers and the
+// metrics come out consistent.
 func TestSmokeBancada(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	inv := filepath.Join(home, "Unioeste/ic/experimentos/dados-sessao-20260924/BRUTOS/arbitro/invocation.jsonl")

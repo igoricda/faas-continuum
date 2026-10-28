@@ -17,17 +17,18 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// TestPressaoDoCorpo504ChegaAoEntry fecha a FIAÇÃO que os dois testes de
-// unidade não cobrem: nó real (httptest) respondendo 504 com o bloco
-// `pressure` no corpo, passando pelo dispatch, pelo parser e pelo buildEntry
-// ATÉ o invocation log. O produtor é testado no nodeapi (o corpo que ele
-// escreve) e o consumidor aqui, mas a emenda entre os dois era confiada — um
-// erro no `io.ReadAll` do ramo 504, no nome do campo JSON ou no caminho do
-// `captured.admPressure` passaria pelos dois lados.
+// TestPressaoDoCorpo504ChegaAoEntry closes the wiring that the two unit tests
+// do not cover: a real node answering timed out with the pressure block in the
+// body, passing through the dispatch, the parser and the construction of the
+// entry, all the way to the invocation log. The producer is tested in the node
+// interface and the consumer here, and the seam between them was trusted, so an
+// error in the read of the timed out body, in the name of the JSON field or in
+// the path of the captured pressure would pass both sides.
 //
-// Além dos três campos no Entry, confere o efeito no History: o 504 de
-// admissão é SATURAÇÃO DO NÓ (Total=0, Saturation=1, NodeSaturation=1) — o
-// mesmo contrato que o D1/D3 consomem.
+// Beyond the three fields of the entry, it checks the effect on the history:
+// the admission timeout is a node saturation, with a zero total, one saturation
+// and one node saturation, which is the same contract that the selection
+// consumes.
 func TestPressaoDoCorpo504ChegaAoEntry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -86,11 +87,12 @@ func TestPressaoDoCorpo504ChegaAoEntry(t *testing.T) {
 	}
 }
 
-// TestNodeAdmissionPressureParse cobre o PARSER REAL com os casos que
-// importam: bloco completo, corpo sem bloco, corpo invalido/vazio, bloco nulo
-// e corpo acima do teto. Antes desta versao o teste vivia no nodeapi como um
-// SHIM que reimplementava a decodificacao — pinava a forma do JSON mas nao o
-// parser que roda em producao, e podia divergir dele em silencio.
+// TestNodeAdmissionPressureParse covers the real parser with the cases that
+// matter: a complete block, a body without the block, an invalid or empty body,
+// a null block and a body above the ceiling. Previously the test lived in the
+// node interface as a shim that reimplemented the decoding, which pinned the
+// shape of the JSON but not the parser that runs in production, and could
+// diverge from it silently.
 func TestNodeAdmissionPressureParse(t *testing.T) {
 	grande := fmt.Sprintf(`{"code":"ACQUIRE_TIMEOUT","pressure":{"pool_alive":1},"x":%q}`,
 		strings.Repeat("a", int(maxCapacityErrorBodyBytes)+1))
@@ -123,18 +125,18 @@ func TestNodeAdmissionPressureParse(t *testing.T) {
 	}
 }
 
-// TestRetratoDeAdmissaoNoEntryDo504 e o outro lado do C6.3(a).
+// TestRetratoDeAdmissaoNoEntryDo504 is the other side of the capture.
 //
-// O produtor ja escrevia o retrato no corpo do 504, mas o Arbitro o descartava
-// por um motivo estrutural: `buildEntry` so lia ocupacao do piggyback de
-// capacidade, que existe SO no 2xx (`if err == nil`,
-// gateway_attempt_record.go). Entao um pedido que nunca executou — o unico
-// caso em que a pressao de admissao e diretamente observavel — era gravado sem
-// `queue_depth`, sem `instances_available` e sem `acquire_wait_ms`.
+// The producer already wrote the reading in the body of the timed out answer,
+// but the arbiter discarded it for a structural reason: the construction of the
+// entry only read the occupancy from the capacity piggyback, which exists only
+// on a success. A request that never ran, which is the only case in which the
+// admission pressure is directly observable, was therefore recorded without the
+// queue depth, the available instances and the acquisition wait.
 //
-// Este teste fixa o efeito do CONSUMIDOR: o retrato que o no mandou tem de
-// aparecer no Entry. Sem ele, a mudanca no produtor seria um no-op do ponto de
-// vista de quem decide.
+// This test pins the effect of the consumer: the reading that the node sent has
+// to appear in the entry, since without it the change in the producer would be a
+// no-op from the point of view of the decision.
 func TestRetratoDeAdmissaoNoEntryDo504(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	node := nodes.Node{NodeID: "nevoa-1"}
@@ -168,10 +170,10 @@ func TestRetratoDeAdmissaoNoEntryDo504(t *testing.T) {
 	}
 }
 
-// TestRetratoAusenteNaoViraZero: no antigo, ou corpo truncado, nao ha bloco.
-// O Entry tem de ficar com os valores que JÁ teria (zero), e o histrico nao
-// pode ganhar um numero inventado. Ausencia e zero sao coisas diferentes —
-// "nao sei a fila" nao e "a fila estava vazia".
+// TestRetratoAusenteNaoViraZero covers an older node or a truncated body, in
+// which there is no block. The entry has to keep the values it already had, of
+// zero, and the history cannot gain an invented number, since the absence and
+// the zero are different things: an unknown queue is not an empty queue.
 func TestRetratoAusenteNaoViraZero(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	node := nodes.Node{NodeID: "nevoa-1"}
@@ -196,9 +198,10 @@ func TestRetratoAusenteNaoViraZero(t *testing.T) {
 	}
 }
 
-// TestRetratoNaoContaminaOSucesso: o caminho 2xx tem o SEU proprio retrato (o
-// piggyback) e ele manda. Se o do 504 invadisse o 2xx, um no saudavel
-// receberia numeros de um desfecho que nao foi seu.
+// TestRetratoNaoContaminaOSucesso covers the successful path, which has its own
+// reading, from the piggyback, and that reading wins. If the reading of the
+// timed out body invaded the success, a healthy node would receive numbers from
+// an outcome that was not its own.
 func TestRetratoNaoContaminaOSucesso(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	node := nodes.Node{NodeID: "borda-1"}
@@ -216,8 +219,8 @@ func TestRetratoNaoContaminaOSucesso(t *testing.T) {
 	gw.SetInvocationLog(l)
 	captured := attemptCapture{concrete: "fn-ok"}
 	captured.admPressure = &NodeAdmissionPressure{PoolAlive: 99, QueueDepth: 99, AcquireWaitMS: 99}
-	// Piggyback do 2xx com a MESMA variante concreta (fn-ok), entao e este
-	// retrato que tem de ganhar: queue_depth=3, nao o 99 do 504.
+	// The piggyback of the success carries the same concrete variant, so this is
+	// the reading that has to win, with a queue depth of three and not the ninety-nine of the timeout.
 	metrics := json.RawMessage(`{"telemetry":{"capacity":{"fn-ok":{"max_instances":2,"instances_available":1,"queue_depth":3}}}}`)
 	gw.recordAttempt(node, 200*time.Millisecond, nil, slo, "fn-ok", group, metrics, true, "req-3", 1, captured)
 
@@ -233,10 +236,10 @@ func TestRetratoNaoContaminaOSucesso(t *testing.T) {
 	}
 }
 
-// leEntryDoLog le a ÚLTIMA linha do invocation log e devolve a Entry, que o
-// log achata no JSON (invocation_log.go:30). Ler por aqui em vez de por um
-// getter do History cobre o caminho INTEIRO — buildEntry, storeEntry e disco —
-// e não só a montagem do Entry.
+// leEntryDoLog reads the last line of the invocation log and returns the entry,
+// which the log flattens in the JSON. Reading here instead of through a getter of
+// the history covers the whole path, from the construction to the store and to
+// the disk, and not only the assembly of the entry.
 func leEntryDoLog(t *testing.T, path string) history.Entry {
 	t.Helper()
 	data, err := os.ReadFile(path)

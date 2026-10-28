@@ -12,13 +12,14 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
 )
 
-// TestGateway_TetoDeFilaAprendido é o efeito do teto de fila do self-learning
-// (QueueCapPredictor) no dispatch: com a borda já enfileirada (rank =
-// inflight+1 acima do kMax aprendido), a tentativa NEM COMEÇA e a requisição
-// segue para a névoa; dentro do teto, a borda é tentada normalmente; sem teto
-// aprendido (ok=false), o portão mantém a projeção e nada é pulado. É a
-// regressão do colapso medido na rampa arb9 a 0,1 s (fila de 39 no xp4): sem
-// o pulo por capacidade, o nó frágil volta a ser enterrado pela rajada.
+// TestGateway_TetoDeFilaAprendido covers the effect of the learned queue
+// ceiling on the dispatch: with the edge already queued, since its rank of the
+// requests in flight plus one is above the learned ceiling, the attempt does
+// not even start and the request moves to the fog. Within the ceiling the edge
+// is attempted normally, and without a learned ceiling the gate keeps the
+// projection and nothing is skipped. It is the regression of the collapse
+// measured in the ramp, where a queue of thirty-nine piled up on the fragile
+// node, which without the skip by capacity is buried by the burst again.
 func TestGateway_TetoDeFilaAprendido(t *testing.T) {
 	cases := []struct {
 		name       string

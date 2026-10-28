@@ -1,7 +1,8 @@
-// Testes do polling de prontidão do watchdog-lite:
-// cobrem waitForReady puro (retorna error; sem log.Fatal dentro) só com
-// httptest.Server — sem rede real, sem socket, tetos em ms para a suíte
-// rodar em <<5s. O proxy de newServer fica fora de escopo aqui.
+// Tests of the readiness polling of the watchdog: they cover the pure wait for
+// readiness, which returns an error instead of terminating the process, only
+// with a test server, without a real network and without a socket, and with the
+// ceilings in milliseconds so the suite runs fast. The proxy of the server is
+// out of scope here.
 package main
 
 import (
@@ -14,19 +15,20 @@ import (
 	"time"
 )
 
-// waitForReady retorna nil assim que o upstream responde 200 — cenários
-// de sucesso (200 imediato, transição 503→200, READY_PATH customizado).
+// The wait for readiness returns as soon as the upstream answers with a success,
+// in the success scenarios of an immediate success, of a transition from a
+// rejection to a success and of a custom readiness path.
 func TestWaitForReady_BecomesReady(t *testing.T) {
 	tests := []struct {
 		name string
-		// failFirst: nº de hits iniciais respondidos com 503 antes do
-		// primeiro 200 (0 = 200 imediato).
+		// failFirst is the number of initial hits answered with a rejection before
+		// the first success, where zero means an immediate success.
 		failFirst int
-		// path: sufixo pedido ao servidor de teste; o handler só
-		// responde 200 nesse caminho (404 nos demais), provando que
-		// o poll respeita o READY_PATH customizado.
+		// The path is the suffix requested from the test server, whose handler
+		// answers only on that path and with a not found on the others, which proves
+		// that the polling honors the custom readiness path.
 		path string
-		// wantMinHits: nº mínimo de polls observados no servidor.
+		// wantMinHits is the minimum number of polls observed by the server.
 		wantMinHits int64
 	}{
 		{name: "200-imediato", failFirst: 0, path: "", wantMinHits: 1},
@@ -59,7 +61,7 @@ func TestWaitForReady_BecomesReady(t *testing.T) {
 			if got := hits.Load(); got < tt.wantMinHits {
 				t.Errorf("polls observados = %d, want >= %d", got, tt.wantMinHits)
 			}
-			// Sucesso sai no primeiro 200, sem dormir o teto.
+			// The success exits on the first success, without sleeping the whole ceiling.
 			if elapsed := time.Since(start); elapsed >= 2*time.Second {
 				t.Errorf("waitForReady dormiu o teto: elapsed = %s", elapsed)
 			}
@@ -67,9 +69,9 @@ func TestWaitForReady_BecomesReady(t *testing.T) {
 	}
 }
 
-// waitForReady nunca vê 200: qualquer status != 200 (503, 500, ...)
-// conta como "ainda não pronto" e o poll só sai pelo teto (timeout),
-// retornando context.DeadlineExceeded.
+// The wait for readiness never sees a success: any status other than a success
+// counts as not ready yet, and the polling only leaves through the ceiling, with
+// a timeout of the context.
 func TestWaitForReady_Timeout(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -98,7 +100,7 @@ func TestWaitForReady_Timeout(t *testing.T) {
 			if got := hits.Load(); got < 2 {
 				t.Errorf("polls observados = %d, want >= 2 (poll repetiu até o teto)", got)
 			}
-			// Saiu pelo teto (ms), não por espera de segundos.
+			// It left through the ceiling, in milliseconds, and not by waiting seconds.
 			if elapsed < timeout || elapsed > 5*time.Second {
 				t.Errorf("elapsed = %s, want em [%s, 5s]", elapsed, timeout)
 			}

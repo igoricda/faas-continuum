@@ -1,10 +1,9 @@
 package server
 
-// Regressão de wire (ADR-0012): o bloco `selection_stats` era a
-// instrumentação observacional do SelfLearningSelector (v1) — aposentado e
-// removido junto com o seletor. O campo NÃO pode voltar ao GET /nodes: o
-// observacional canônico é o `selection_risk*` (ver
-// server_selection_risk_test.go).
+// Regression of the wire: the block of the selection statistics was the
+// observational instrumentation of the previous selector, which was retired and
+// removed with it. The field must not come back to the listing of the nodes,
+// since the canonical observational block is the one of the selection risk.
 
 import (
 	"net/http"

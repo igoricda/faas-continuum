@@ -8,11 +8,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/registry"
 )
 
-// Gate test-audit: protege o cálculo do teto efetivo (D1 do adendo
-// 2026-09-30) — timeout próprio vs default do nó vs min(teto, lateCap) para
-// LateReportable. Regressão crível: dropar o min() com lateCap ou o fallback
-// para o default. Sem cobertura existente (função nova). Sem seam novo
-// (função pura, testada direto).
+// Gate test: it protects the computation of the effective ceiling, which is the
+// own timeout against the default of the node against the minimum of the ceiling
+// and the cap of the late report. The credible regressions are dropping the
+// minimum with the cap of the late report or the fallback to the default. The
+// function is new and pure, so it is tested directly without a seam.
 func TestEffectiveFunctionTimeouts(t *testing.T) {
 	def := 90 * time.Second
 	lateCap := 45 * time.Second
@@ -93,10 +93,11 @@ func TestEffectiveFunctionTimeoutsSemTetoExtra(t *testing.T) {
 	}
 }
 
-// Gate test-audit: protege o fio (function_timeout_ms no POST /nodes) —
-// presença com valores efetivos e omissão com getter nil. Regressão crível:
-// esquecer de ligar o getter no payload. Os testes legados não cobrem a
-// chave nova (sem duplicação).
+// Gate test: it protects the wire, where the timeout of the function is announced
+// in the post of the node, with the presence of the effective values and the
+// omission when the getter is absent. The credible regression is forgetting to
+// wire the getter into the payload. The legacy tests do not cover the new key,
+// so there is no duplication.
 func TestBuildRegistrationPayloadTimeoutMS(t *testing.T) {
 	getTimeouts := func() map[string]int { return map[string]int{"hello": 15000} }
 	data, err := buildRegistrationPayload("n1", "borda", "h:8080", true, 0, []string{"hello"}, nil, nil, nil, getTimeouts)

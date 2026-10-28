@@ -15,7 +15,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// POST /internal/late-report — válido, duplicado, 401, oversize
+// Post of a late report, which is valid, duplicated, unauthorized or oversized
 // ---------------------------------------------------------------------------
 
 func TestLateReportEndpoint(t *testing.T) {

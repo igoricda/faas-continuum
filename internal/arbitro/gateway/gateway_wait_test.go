@@ -1,15 +1,15 @@
 package gateway
 
-// Testes da fase de espera (adendo 2026-09-30, Passo 4.4): entrega tardia do
-// primeiro sucesso, vencedor cancela o perdedor, desconexão aborta sem
-// escrever, prazo rígido devolve para nuvem/failure, não-sucesso assenta e
-// continua, e a matemática do hard deadline (D3).
+// Tests of the stage of wait: the late delivery of the first success, the winner
+// cancelling the loser, a disconnection aborting without writing, the hard
+// deadline falling through to the cloud or to the failure, a non-success settling
+// and continuing, and the arithmetic of the hard deadline.
 //
-// Gate test-audit: cada caso protege um ramo distinto do waitPendencies sem
-// dono anterior (fase nova). Regressões críveis: entregar o segundo sucesso,
-// não cancelar o perdedor (gauge vaza), escrever após desconexão, ou trocar
-// max por min no hard (mataria a janela da nuvem sem SLO). Sem seam novo
-// (Handle + httptest + invLog, como os E2E legados).
+// Each case protects a distinct branch of the wait for the pending reports.
+// The credible regressions are delivering the second success, not cancelling the
+// loser, which leaks the meter, writing after a disconnection, and swapping the
+// maximum for the minimum in the hard deadline, which would kill the window of
+// the cloud without an objective.
 import (
 	"context"
 	"encoding/json"
@@ -59,8 +59,9 @@ func readInvLogLines(t *testing.T, path string) []InvocationRecord {
 	return out
 }
 
-// T1 (Passo 4.8): borda estoura a fatia, conclui depois com sucesso — o
-// cliente recebe o corpo com 200 e a Entry assenta sucesso/slo_met=false.
+// The edge exceeds the slice and concludes later with a success, so the client
+// receives the body with a success and the entry settles as a success outside the
+// objective.
 func TestWaitDeliversLateSuccess(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
@@ -99,8 +100,9 @@ func TestWaitDeliversLateSuccess(t *testing.T) {
 	}
 }
 
-// T2 (Passo 4.8): névoa responde dentro da fatia enquanto a borda é
-// pendência — névoa vence, borda é cancelada e o inflight volta a zero.
+// The fog answers within the slice while the edge is a pending report, so the fog
+// wins, the edge is cancelled and the meter of the requests in flight returns to
+// zero.
 func TestWaitFirstSuccessWins(t *testing.T) {
 	releaseSlow := make(chan struct{})
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -120,14 +122,15 @@ func TestWaitFirstSuccessWins(t *testing.T) {
 	}))
 	defer fast.Close()
 	ns, _ := nodes.NewNodeStore("")
-	// Ordem estável por NodeID: a-slow arma primeiro, b-fast vence no laço.
+	// Stable order by node identifier: the slow node arms first and the fast one wins in the loop.
 	_, _ = ns.Upsert(nodes.Node{NodeID: "a-slow", Layer: nodes.LayerBorda, Host: hostFromURL(t, slow.URL), Functions: []string{"fn"}, FunctionTimeoutMS: map[string]int{"fn": 15000}})
 	_, _ = ns.Upsert(nodes.Node{NodeID: "b-fast", Layer: nodes.LayerBorda, Host: hostFromURL(t, fast.URL), Functions: []string{"fn"}, FunctionTimeoutMS: map[string]int{"fn": 15000}})
 	logPath := t.TempDir() + "/inv.jsonl"
 	gw := waitTestGateway(t, ns, logPath)
 
-	// SLO 200ms dá fatias ~100ms: margem folgada para a b-fast responder
-	// dentro da própria fatia (~10ms) mesmo sob CI carregado.
+	// An objective of two hundred milliseconds gives slices of about one hundred,
+	// which is a loose margin for the fast node to answer within its own slice even
+	// under a loaded continuous integration.
 	rec := invokeRecorder(t, gw, `{"function":"fn","slo":{"max_latency_ms":200},"input":{"a":1}}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d want 200 body=%s", rec.Code, rec.Body.String())
@@ -156,8 +159,9 @@ func TestWaitFirstSuccessWins(t *testing.T) {
 	}
 }
 
-// T5 (Passo 4.8): cliente some durante a espera — aborta sem escrever, sem
-// pânico, sem vazar goroutine (o drain junta; -race acusa).
+// The client disappears during the wait, so the handler aborts without writing,
+// without a panic and without leaking a goroutine, and the race detector confirms
+// the join.
 func TestWaitClientDisconnect(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -204,9 +208,9 @@ func TestWaitClientDisconnect(t *testing.T) {
 	}
 }
 
-// Prazo rígido estourado devolve para nuvem/failure (sem esperar o cap do
-// nó); a órfã segue viva (sem cancelAll, 2026-10-01/2) e o drain a assenta com
-// o desfecho real depois da resposta.
+// An expired hard deadline falls through to the cloud or to the failure, without
+// waiting for the ceiling of the node. The orphan stays alive, since nothing
+// cancels it, and the drain settles it with the real outcome after the answer.
 func TestWaitHardExpiryFallsThrough(t *testing.T) {
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -229,13 +233,13 @@ func TestWaitHardExpiryFallsThrough(t *testing.T) {
 	if rec.Code != http.StatusGatewayTimeout {
 		t.Fatalf("status=%d want 504 body=%s", rec.Code, rec.Body.String())
 	}
-	// hard = max(200ms, ~400ms) << 5s do nó bloqueado.
+	// The hard deadline is the maximum between two hundred and about four hundred milliseconds, far below the five seconds of the blocked node.
 	if elapsed > 3*time.Second {
 		t.Fatalf("espera=%v: prazo rígido não cortou", elapsed)
 	}
-	// A órfã segue viva: o drain (pós-resposta) a assenta com o desfecho real
-	// (timeout no cap do próprio nó) — o armamento e o desfecho coexistem no
-	// invLog, e o 504 acima é o failure final, não o corte da execução.
+	// The orphan stays alive, and the drain after the answer settles it with the real
+	// outcome, which is the timeout at the ceiling of the node, so the arming and the
+	// outcome coexist in the log and the timed out answer above is the final failure.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		raw, _ := os.ReadFile(logPath)
@@ -262,8 +266,8 @@ func TestWaitHardExpiryFallsThrough(t *testing.T) {
 	}
 }
 
-// Não-sucesso tardio assenta a Entry real (supersede) e a espera continua —
-// sem sucesso, cai na nuvem/failure com a classe real no log.
+// A late non-success settles the real entry, which supersedes the previous one, and
+// the wait continues, so without a success it falls through to the cloud or to the failure with the real class in the log.
 func TestWaitLateFailureSettles(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(150 * time.Millisecond)
@@ -296,7 +300,7 @@ func TestWaitLateFailureSettles(t *testing.T) {
 	}
 }
 
-// D3: hard = max(overall, max(attemptStart+cap)); sem pendências, overall.
+// The hard deadline is the maximum between the overall budget and the start of the attempt plus the ceiling, and without pending reports it is the overall budget.
 func TestHardDeadlineMath(t *testing.T) {
 	start := time.Now()
 	armed := []*pendingAttempt{

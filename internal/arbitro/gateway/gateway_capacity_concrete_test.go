@@ -1,10 +1,10 @@
 package gateway
 
-// Keying de capacidade pelo CONCRETO resolvido (selflearning-consistency-fixes,
-// todo 6, C2/D17): o produtor (nodeapi) reporta ocupação pela variante física
-// (fn.Name), então a marca otimista de rejeição de capacidade precisa usar a
-// MESMA chave concreta resolvida no dispatch — nunca o nome pedido (que pode
-// ser uma categoria). Em HEAD a marca cai no nome pedido.
+// Keying of the capacity by the resolved concrete variant: the producer reports
+// the occupancy by the physical variant, so the optimistic mark of a capacity
+// rejection has to use the same concrete key resolved at the dispatch, and never
+// the requested name, which may be a category. Otherwise the mark lands on the
+// wrong key.
 
 import (
 	"net/http"

@@ -21,8 +21,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// defaultLimits espelha selection_test.defaultLimits (mesmos tetos da Sprint 6);
-// duplicado aqui porque testes de pacotes distintos não compartilham identificadores.
+// defaultLimits mirrors the limits of the selection tests, with the same
+// ceilings, and it is duplicated here because tests of different packages do not
+// share identifiers.
 var defaultLimits = selection.LimitsConfig{
 	MaxCPUPct:   85,
 	MaxMemPct:   90,
@@ -88,8 +89,8 @@ func doReq(t *testing.T, h http.Handler, method, path string, body any, token st
 
 func TestServer_ControlRoutesSemCredencial401(t *testing.T) {
 	srv, _, _, _ := newTestServerEnv(t)
-	// Com tokens por nó configurados (correcao-seguranca-i1-i7, todo 3),
-	// as rotas de nó exigem o token do nó — sem credencial é 401.
+	// With the per-node tokens configured, the node routes require the token of
+	// the node, so without a credential the answer is unauthorized.
 	tokens, err := nodes.NewNodeTokenStore("")
 	if err != nil {
 		t.Fatal(err)
@@ -121,7 +122,7 @@ func TestServer_ControlRoutesSemCredencial401(t *testing.T) {
 			}
 		})
 	}
-	// Token errado também 401
+	// A wrong token is also unauthorized.
 	rr := doReq(t, h, "GET", "/nodes", nil, "token-invalido")
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("token inválido: status=%d want 401", rr.Code)
@@ -165,7 +166,7 @@ func TestServer_RegistroFeliz201EGet(t *testing.T) {
 	if len(list.Nodes) != 1 {
 		t.Fatalf("nodes len=%d want 1 body=%s", len(list.Nodes), rr.Body.String())
 	}
-	// Verificar que o nó contém status e sem latest_telemetry ainda
+	// It verifies that the node carries a status and no telemetry yet.
 	var entry map[string]any
 	if err := json.Unmarshal(list.Nodes[0], &entry); err != nil {
 		t.Fatalf("unmarshal entry: %v", err)
@@ -183,7 +184,7 @@ func TestServer_RegistroFeliz201EGet(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Segundo POST mesmo id →200
+// A second post with the same identifier gives a success
 // ---------------------------------------------------------------------------
 
 func TestServer_SegundoPOSTMesmoID200(t *testing.T) {
@@ -210,14 +211,14 @@ func TestServer_SegundoPOSTMesmoID200(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Além nodes.MaxNodes →503
+// Beyond the maximum of nodes the answer is a rejection
 // ---------------------------------------------------------------------------
 
 func TestServer_AlemMaxNodes503(t *testing.T) {
 	srv, token, ns, _ := newTestServerEnv(t)
 	h := srv.Handler()
 
-	// Preencher até nodes.MaxNodes via store direto
+	// Fill the store up to the maximum of nodes through the store itself.
 	for i := 0; i < nodes.MaxNodes; i++ {
 		id := fmt.Sprintf("node-%03d", i)
 		n := nodes.Node{NodeID: id, Layer: nodes.LayerBorda, Host: fmt.Sprintf("10.0.0.%d:8080", i%254+1)}
@@ -242,7 +243,7 @@ func TestServer_AlemMaxNodes503(t *testing.T) {
 		t.Fatalf("retryable=false want true")
 	}
 
-	// node_id JÁ existente deve continuar 200 mesmo no teto
+	// An identifier that already exists keeps giving a success even at the ceiling.
 	body2 := map[string]any{"node_id": "node-000", "layer": "nevoa", "host": "10.0.0.99:9999"}
 	rr = doReq(t, h, "POST", "/nodes", body2, token)
 	if rr.Code != http.StatusOK {
@@ -273,7 +274,7 @@ func TestServer_CorpoAcimaLimite413(t *testing.T) {
 		t.Fatalf("code=%q want PAYLOAD_TOO_LARGE", er.Code)
 	}
 
-	// Também em telemetria
+	// The same holds for the telemetry.
 	nbody := map[string]any{"node_id": "n1", "layer": "borda", "host": "10.0.0.1:8080"}
 	rr = doReq(t, h, "POST", "/nodes", nbody, token)
 	if rr.Code != http.StatusCreated {
@@ -320,7 +321,8 @@ func TestServer_TelemetriaIDDivergente400(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Telemetria para não registrado →404 e GET confirma não populou Monitor
+// Telemetry for an unregistered node gives a not found, and the listing
+// confirms that the monitor was not populated
 // ---------------------------------------------------------------------------
 
 func TestServer_TelemetriaParaNaoRegistrado404(t *testing.T) {
@@ -339,11 +341,11 @@ func TestServer_TelemetriaParaNaoRegistrado404(t *testing.T) {
 	if er.Code != "NODE_NOT_FOUND" {
 		t.Fatalf("code=%q want NODE_NOT_FOUND", er.Code)
 	}
-	// Monitor não deve ter sido populado
+	// The monitor must not have been populated.
 	if _, ok := mon.Latest("ghost"); ok {
 		t.Fatalf("Monitor populado para nó fantasma")
 	}
-	// GET /nodes deve estar vazio (nenhum nó registrado)
+	// The listing of the nodes must be empty, since no node was registered.
 	rr = doReq(t, h, "GET", "/nodes", nil, token)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET /nodes: %d", rr.Code)
@@ -453,7 +455,7 @@ func TestServer_DeleteNode(t *testing.T) {
 	if len(list.Nodes) != 0 {
 		t.Fatalf("nodes len=%d want 0", len(list.Nodes))
 	}
-	// Segunda deleção 404
+	// A second deletion is a not found.
 	rr = doReq(t, h, "DELETE", "/nodes/n1", nil, token)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("segundo delete status=%d want 404", rr.Code)
@@ -475,7 +477,7 @@ func TestServer_Healthz200(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("healthz status=%d want 200", rr.Code)
 	}
-	// healthz sem credencial também passa
+	// The health route also passes without a credential.
 	req2 := httptest.NewRequest("GET", "/healthz", nil)
 	rr2 := httptest.NewRecorder()
 	h.ServeHTTP(rr2, req2)
@@ -485,7 +487,7 @@ func TestServer_Healthz200(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// invoke sem credencial passa (não 401) + rate-limit
+// An invocation without a credential passes, and it is rate limited
 // ---------------------------------------------------------------------------
 
 func TestServer_InvokeSemCredencialPassa(t *testing.T) {
@@ -494,7 +496,7 @@ func TestServer_InvokeSemCredencialPassa(t *testing.T) {
 
 	body := map[string]any{"function": "hello", "input": map[string]any{}}
 	rr := doReq(t, h, "POST", "/invoke", body, "")
-	// Sem nó disponível => 503 NO_NODE_AVAILABLE, mas NÃO 401
+	// Without an available node the answer is a rejection, and not an unauthorized.
 	if rr.Code == http.StatusUnauthorized {
 		t.Fatalf("invoke sem credencial retornou 401, want não-401")
 	}
@@ -511,7 +513,7 @@ func TestServer_InvokeSemCredencialPassa(t *testing.T) {
 }
 
 func TestServer_InvokeRateLimit429(t *testing.T) {
-	// Gateway real exige nó; para testar rate-limit isolado, injetamos handler fake
+	// The real gateway requires a node, so an injected fake handler isolates the rate limit.
 	fakeHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"ok":true}`))
@@ -523,14 +525,14 @@ func TestServer_InvokeRateLimit429(t *testing.T) {
 	srv := &Server{
 		nodes:         ns,
 		mon:           mon,
-		gw:            &gateway.Gateway{}, // não usado, substituído por fake via invoke limiter direto
+		gw:            &gateway.Gateway{}, // unused, replaced by a fake through the invoke limiter directly
 		cred:          gen.Cred,
 		staleAfter:    90 * time.Second,
 		invokeLimiter: auth.NewRateLimiter(60, time.Minute),
 	}
 	limited := srv.invokeRateLimit(fakeHandler)
 
-	// 60 requisições devem passar
+	// Sixty requests must pass.
 	for i := 0; i < 60; i++ {
 		req := httptest.NewRequest("POST", "/invoke", strings.NewReader(`{"function":"x","input":{}}`))
 		req.RemoteAddr = "10.0.0.1:1234"
@@ -559,7 +561,7 @@ func TestServer_InvokeRateLimit429(t *testing.T) {
 	if !er.Retryable {
 		t.Fatalf("retryable=false want true")
 	}
-	// IP diferente não é afetado
+	// A different address is not affected.
 	req2 := httptest.NewRequest("POST", "/invoke", strings.NewReader(`{"function":"x","input":{}}`))
 	req2.RemoteAddr = "10.0.0.2:1234"
 	rr2 := httptest.NewRecorder()
@@ -570,7 +572,7 @@ func TestServer_InvokeRateLimit429(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Validação INVALID_NODE →400
+// The validation of an invalid node gives a bad request
 // ---------------------------------------------------------------------------
 
 func TestServer_RegistroInvalido400(t *testing.T) {
@@ -612,8 +614,8 @@ func TestServer_RegistroJSONInvalido400(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Atomico isNew sem Get separado — concorrência (isNew)
-// já coberto em nodes_test, aqui apenas smoke
+// The atomic creation flag replaces a separate read, and the concurrency is
+// already covered by the tests of the store, so here it is only a smoke test
 // ---------------------------------------------------------------------------
 
 func TestServer_RegistroContentTypeJSON(t *testing.T) {
@@ -627,9 +629,9 @@ func TestServer_RegistroContentTypeJSON(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Tabela de testes para histórico (F21)
-// hist=nil / window=0 / clock=nil → 200, no history_summary, no panic
-// hist set → keys present
+// Table of tests for the summary of the history: with no history, a zero window
+// or no clock the answer is a success, with no summary of the history and no
+// panic, and with a history the keys are present
 // ---------------------------------------------------------------------------
 
 func TestServer_HistoryTable(t *testing.T) {

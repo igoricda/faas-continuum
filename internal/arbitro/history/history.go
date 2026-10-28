@@ -165,7 +165,7 @@ func IsAggLayerKey(key string) bool {
 //     same normalization as the average, and a negative value is clamped
 //     to zero.
 //   - MemPeakBytes is the peak of the memory in bytes.
-//   - AcquireWaitMS, ReadinessMS and FunctionMS are the phases of the
+//   - AcquireWaitMS, ReadinessMS and FunctionMS are the stages of the
 //     invocation, which the late report does not carry on the wire and
 //     inherits through the live reference.
 //   - QueueDepth and InstancesAvailable are the occupancy of the pool of

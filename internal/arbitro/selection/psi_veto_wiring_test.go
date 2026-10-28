@@ -1,15 +1,16 @@
 package selection
 
-// Wiring do veto full PSI no Select (todo 12): o veto puro de psi_veto.go
-// (defaults T_cpu=28, T_full=12) vive no loop por-nó do RiskSelector na
-// ordem documentada projected-guard → PSI-veto, com fail-open do próprio
-// seletor (restaura o conjunto SÓ se ele esvaziou por causa do veto).
-// Monitor sem PSI => zero vetos PSI (compat). Limiar inválido => erro no
-// Validate (fail-fast no wiring).
+// Wiring of the full pressure veto in the selection: the pure veto, with the
+// default thresholds, lives in the loop per node of the risk selector, in the
+// documented order of the projected guard followed by the pressure veto, with the
+// fail-open of the selector itself, which restores the set only when the veto
+// emptied it. A monitor without pressure gives no pressure veto, which preserves
+// the compatibility, and an invalid threshold is an error in the validation,
+// which is the fail-fast of the wiring.
 //
-// O v1 (SelfLearningSelector) tinha o mesmo veto encaixado no fail-open do
-// veto monotônico; com a aposentadoria do v1 (ADR-0012) o wiring passa a
-// ser testado no RiskSelector, único seletor canônico.
+// The previous selector had the same veto inside the fail-open of the monotonic
+// veto, and with its retirement the wiring is tested in the risk selector, the
+// single canonical selector.
 
 import (
 	"testing"
@@ -23,8 +24,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// vetoMonitor monta o Monitor com PSI explícito por nó (cpu_some, mem_full);
-// (0,0) sem campos => modo compatibilidade (sem PSI).
+// vetoMonitor builds the monitor with an explicit pressure per node, with the
+// processor and the full memory averages, and a zero reading without the fields
+// means the compatibility mode, without pressure.
 func vetoMonitor(now time.Time, psi map[string][2]float64, usage map[string]float64) *monitor.Monitor {
 	mon := monitor.NewMonitor()
 	for id, p := range psi {
@@ -64,11 +66,11 @@ func TestPSIVetoWiring(t *testing.T) {
 	}
 
 	t.Run("mem-full-acima-do-limiar-veta-observavel", func(t *testing.T) {
-		// sick: CPU baixa (venceria o bootstrap) mas mem_full=20 > T_full=12
-		// => vetado; healthy (CPU 50, PSI baixo) passa sozinho — sem revival,
-		// pois aptList não esvazia. Com limiares frouxos o veto some e sick
-		// volta a liderar: prova observável de que o veto (e não outra via)
-		// decidiu.
+		// The sick node has a low processor usage, which would win the bootstrap, but
+		// its full memory pressure exceeds the threshold, so it is vetoed, while the
+		// healthy node passes alone, without a revival, since the eligible list does
+		// not become empty. With loose thresholds the veto disappears and the sick
+		// node leads again, which is an observable proof that the veto decided.
 		mon := vetoMonitor(now,
 			map[string][2]float64{"sick": {5, 20}, "healthy": {5, 5}},
 			map[string]float64{"sick": 10, "healthy": 50})
@@ -87,9 +89,10 @@ func TestPSIVetoWiring(t *testing.T) {
 	})
 
 	t.Run("veto-sozinho-revive-via-fail-open", func(t *testing.T) {
-		// Nó único vetado pelo PSI nunca esvazia sozinho: o fail-open do
-		// RiskSelector restaura o conjunto psiVetoed quando a lista apta
-		// esvaziou SÓ por causa do veto (§7.1) — o nó sai por bootstrap.
+		// A single node vetoed by the pressure never empties the list alone: the
+		// fail-open of the risk selector restores the vetoed set when the eligible
+		// list became empty only because of the veto, so the node leaves through the
+		// bootstrap.
 		mon := vetoMonitor(now,
 			map[string][2]float64{"sick": {5, 20}},
 			map[string]float64{"sick": 10})
@@ -124,9 +127,9 @@ func TestPSIVetoWiring(t *testing.T) {
 	})
 
 	t.Run("validate-fail-fast", func(t *testing.T) {
-		// Regra única reconciliada (>0 em todas as camadas): defaults passam,
-		// qualquer braço <=0 falha no config.Validate (o mesmo que
-		// ValidatePSIVetoThresholds rejeita).
+		// The single reconciled rule, with a positive value required at every layer:
+		// the defaults pass, and any threshold at or below zero fails the validation
+		// of the configuration, which is the same predicate of the pressure veto.
 		if err := config.Defaults().Validate(); err != nil {
 			t.Fatalf("Defaults().Validate() = %v, want nil (defaults 28/12)", err)
 		}
@@ -141,9 +144,9 @@ func TestPSIVetoWiring(t *testing.T) {
 				t.Fatalf("config.Validate() com psi-veto %+v = nil, want erro", th)
 			}
 		}
-		// Overlay por flag/env chega ao mesmo Validate: flag negativa =>
-		// Load ok (parse) mas Validate falha (main.go ainda aborta Fatal
-		// antes, via validateStartupFlags, no mesmo predicado <=0).
+		// An overlay by flag or by environment reaches the same validation, so a
+		// negative flag parses correctly and fails the validation, which aborts the
+		// startup on the same predicate.
 		loaded, err := config.Load("/nonexistent-task12.jsonc", map[string]string{"psi-veto-cpu": "-3"})
 		if err != nil {
 			t.Fatalf("Load com flag negativa: %v", err)

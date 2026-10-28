@@ -1,11 +1,11 @@
 package gateway
 
-// Cost-weighted in-flight gauge + unified projected-load plumbing
-// (selflearning-cold-contention, todo 5): balanço do gauge sob Handle
-// concorrente, isolamento de duas funções no mesmo nó (k é contagem de NÓ),
-// custo por nó/função com filtro recv-time, projeção sem dupla-contagem no
-// caso de UMA requisição em voo, decremento em panic e em todos os caminhos
-// de erro.
+// Cost-weighted meter of the requests in flight and the unified plumbing of
+// the projected load: the balance of the meter under a concurrent handler, the
+// isolation of two functions in the same node, since the count is per node,
+// the cost per node and function with the reception-time filter, the
+// projection without a double count in the case of a single request in
+// flight, and the decrement on a panic and on every error path.
 
 import (
 	"encoding/json"
@@ -45,25 +45,26 @@ func TestInflightGaugeIncDecBalance(t *testing.T) {
 	if g.NodeK("n1") != 0 || g.FnK("n1", "f1") != 0 {
 		t.Fatalf("após 2 Dec = node %d fn %d, want 0/0", g.NodeK("n1"), g.FnK("n1", "f1"))
 	}
-	// delete-on-zero: as três coleções voltam ao vazio (bounded pela
-	// concorrência viva, não pelo histórico).
+	// Deletion on zero: the three collections return to empty, bounded by the
+	// live concurrency and not by the history.
 	if len(g.node) != 0 || len(g.fn) != 0 || len(g.entries) != 0 {
 		t.Fatalf("mapas não zeraram: node=%d fn=%d entries=%d", len(g.node), len(g.fn), len(g.entries))
 	}
-	// Dec abaixo de zero é no-op (nunca negativo).
+	// A decrement below zero does nothing, since the value is never negative.
 	g.Dec("n1", "f1", now)
 	if g.NodeK("n1") != 0 {
 		t.Fatalf("Dec extra levou NodeK a %d, want 0", g.NodeK("n1"))
 	}
 }
 
-// TestInflightGaugeDecIdentityNewerFirst prova que Dec remove a entry pela
-// IDENTIDADE do dispatch (o `at` carimbado no Inc), NÃO por FIFO: com duas
-// entries de custos DIFERENTES na mesma chave (nó, função), a MAIS NOVA
-// (t2, custo 1) termina primeiro e a sobrevivente deve ser a MAIS ANTIGA
-// (t1, custo 5), de modo que NodeCostSince reflita 5 — não 1. Sob a lógica
-// FIFO anterior, Dec removeria ents[0] (a de custo 5) e NodeCostSince
-// devolveria 1: este teste falha naquele comportamento.
+// TestInflightGaugeDecIdentityNewerFirst proves that the decrement removes the
+// entry by the identity of the dispatch, which is the instant stamped at the
+// increase, and not by first in first out: with two entries of different costs
+// in the same pair of node and function, the newer one finishes first and the
+// survivor has to be the older one, so the cost since the reception reflects
+// five and not one. Under the previous first-in-first-out logic the decrement
+// would remove the older entry and the cost would be one, and this test fails
+// on that behavior.
 func TestInflightGaugeDecIdentityNewerFirst(t *testing.T) {
 	g := NewInflightGauge()
 	t1 := time.Unix(1_700_000_000, 0)
@@ -71,7 +72,7 @@ func TestInflightGaugeDecIdentityNewerFirst(t *testing.T) {
 	g.Inc("n1", "f1", 5.0, t1) // mais ANTIGA, custo 5
 	g.Inc("n1", "f1", 1.0, t2) // mais NOVA, custo 1
 
-	// A mais nova (t2) termina primeiro.
+	// The newer entry finishes first.
 	g.Dec("n1", "f1", t2)
 
 	if g.FnK("n1", "f1") != 1 || g.NodeK("n1") != 1 {
@@ -80,20 +81,20 @@ func TestInflightGaugeDecIdentityNewerFirst(t *testing.T) {
 	if got := g.NodeCostSince("n1", time.Time{}); got != 5.0 {
 		t.Fatalf("NodeCostSince=%v, want 5 (custo da entry ANTIGA sobrevivente; FIFO deixaria 1)", got)
 	}
-	// A entry antiga (t1) continua visível para um recvAt anterior a t1...
+	// The older entry stays visible for a reception instant before it...
 	if got := g.NodeCostSince("n1", t1.Add(-time.Millisecond)); got != 5.0 {
 		t.Fatalf("NodeCostSince(antes de t1)=%v, want 5", got)
 	}
-	// ...e some para recvAt == t1 (filtro estritamente posterior).
+	// ...and disappears for a reception instant equal to it, since the filter is strictly later.
 	if got := g.NodeCostSince("n1", t1); got != 0.0 {
 		t.Fatalf("NodeCostSince(t1)=%v, want 0 (t1 não é estritamente posterior a t1)", got)
 	}
 }
 
-// TestInflightGaugeDecUnmatchedDrainsOldest prova o fallback documentado:
-// um `at` que não casa NENHUMA entry (colisão de relógio/fake clock ou entry
-// já removida) drena a MAIS ANTIGA, para que a chave nunca vaze contagem
-// obsoleta (sem panic).
+// TestInflightGaugeDecUnmatchedDrainsOldest proves the documented fallback: an
+// instant that matches no entry, from a clock collision or from an entry that
+// was already removed, drains the oldest one, so the key never leaks a stale
+// count and the call never panics.
 func TestInflightGaugeDecUnmatchedDrainsOldest(t *testing.T) {
 	g := NewInflightGauge()
 	t1 := time.Unix(1_700_000_000, 0)
@@ -101,7 +102,7 @@ func TestInflightGaugeDecUnmatchedDrainsOldest(t *testing.T) {
 	g.Inc("n1", "f1", 5.0, t1)
 	g.Inc("n1", "f1", 1.0, t2)
 
-	// Nenhum match => remove a mais antiga (custo 5).
+	// No match means that the oldest entry is removed, of cost five.
 	g.Dec("n1", "f1", t2.Add(time.Hour))
 
 	if g.FnK("n1", "f1") != 1 || g.NodeK("n1") != 1 {
@@ -110,7 +111,7 @@ func TestInflightGaugeDecUnmatchedDrainsOldest(t *testing.T) {
 	if got := g.NodeCostSince("n1", time.Time{}); got != 1.0 {
 		t.Fatalf("NodeCostSince=%v, want 1 (a mais antiga/custo 5 foi drenada)", got)
 	}
-	// Drenar até o vazio apaga a chave (sem leak de slice vazio).
+	// Draining to empty deletes the key, so no empty slice is leaked.
 	g.Dec("n1", "f1", t2)
 	if g.FnK("n1", "f1") != 0 || g.NodeK("n1") != 0 || len(g.entries) != 0 {
 		t.Fatalf("chave não zerou: node=%d fn=%d entries=%d", g.NodeK("n1"), g.FnK("n1", "f1"), len(g.entries))
@@ -146,7 +147,7 @@ func TestInflightGaugeTwoFunctionIsolation(t *testing.T) {
 	t.Cleanup(func() { _ = l.Close() })
 	gw.SetInvocationLog(l)
 
-	// A Entry registrada com o k capturado no dispatch carrega o k de NÓ.
+	// The entry recorded with the count captured at the dispatch carries the count of the node.
 	gw.recordAttempt(nodes.Node{NodeID: "n1"}, time.Millisecond, nil, nil, "f2", "f2", nil, true, "", 0, attemptCapture{inflight: k2})
 	recs := readInvRecords(t, logPath)
 	if len(recs) != 1 {
@@ -166,18 +167,18 @@ func TestInflightGaugeNodeCostSinceMixedFunction(t *testing.T) {
 	g.Inc("n1", "f2", 2.0, t2)
 	g.Inc("n2", "f1", 5.0, t2)
 
-	// since zero soma TODAS as entries vivas do nó, em TODAS as funções.
+	// A zero instant sums every live entry of the node in every function.
 	if got := g.NodeCostSince("n1", time.Time{}); got != 3.0 {
 		t.Fatalf("NodeCostSince(n1, zero)=%v, want 3 (f1+f2 mixed-function)", got)
 	}
-	// Filtro recv-time: só entries estritamente posteriores a since.
+	// Reception-time filter: only entries strictly after the instant.
 	if got := g.NodeCostSince("n1", t1); got != 2.0 {
 		t.Fatalf("NodeCostSince(n1, t1)=%v, want 2 (só a entry de t2)", got)
 	}
 	if got := g.NodeCostSince("n1", t2); got != 0.0 {
 		t.Fatalf("NodeCostSince(n1, t2)=%v, want 0 (não estritamente posterior)", got)
 	}
-	// Isolamento por nó (prefixo nodeID\x00 não casa nó vizinho).
+	// Isolation per node: the prefix of the node identifier does not match a neighbor.
 	if got := g.NodeCostSince("n2", t1); got != 5.0 {
 		t.Fatalf("NodeCostSince(n2, t1)=%v, want 5", got)
 	}
@@ -266,7 +267,7 @@ func TestHandleProjectedOneInFlightNoDoubleCount(t *testing.T) {
 		t.Fatalf("NewHistory: %v", err)
 	}
 	mon := monitor.NewMonitor()
-	// Telemetria observada: CPU 30, mem 20, recebida ANTES do dispatch.
+	// Observed telemetry, with a processor usage of thirty and a memory usage of twenty, received before the dispatch.
 	mon.UpdateAt(telemetry.Package{NodeID: "n1", CPUUsagePct: 30, MemoryUsagePct: 20}, now.Add(-time.Second))
 
 	g := NewInflightGauge()
@@ -286,9 +287,10 @@ func TestHandleProjectedOneInFlightNoDoubleCount(t *testing.T) {
 	t.Cleanup(func() { _ = l.Close() })
 	gw.SetInvocationLog(l)
 
-	// Semeia UMA amostra solo com CPU conhecida => ExpectedCost = ownCost. O
-	// bloco telemetry carrega PSI>0 nos dois eixos para a amostra passar no
-	// gate solo+PSI (todo 11); sem ele ownCost seria 0 e projected 30.
+	// Seed a single solo sample with a known processor usage, so the expected
+	// cost is the own cost. The telemetry block carries a positive pressure on
+	// both axes, so the sample passes the solo gate, and without it the own cost
+	// would be zero and the projection would be thirty.
 	seed := json.RawMessage(`{"cold_start":false,"resource_profile":{"cpu_pct_avg":12.0,"sample_count":5},"telemetry":{"cpu_pressure":{"avg10":12.5},"memory_pressure_full":{"avg10":8.25}}}`)
 	gw.recordAttempt(node, time.Millisecond, nil, nil, "fn", group, seed, true, "", 0, attemptCapture{sc: history.ScenarioContext{LoadBucket: history.BucketUnknown}, inflight: 1})
 
@@ -305,8 +307,8 @@ func TestHandleProjectedOneInFlightNoDoubleCount(t *testing.T) {
 	}
 	entry := recs[1].Entry
 
-	// ownCost=12, custo em voo=0 => projected = 30 + 0 + 12 = 42 (1x, nunca
-	// 2x o custo próprio).
+	// The own cost is twelve and the cost in flight is zero, so the projection is
+	// thirty plus twelve, which is forty-two, with the own cost counted once.
 	const wantProjected = 42.0
 	if math.Abs(entry.ProjectedLoadPct-wantProjected) > 1e-9 {
 		t.Fatalf("ProjectedLoadPct=%v, want %v (observed 30 + ownCost 12, sem dupla-contagem)", entry.ProjectedLoadPct, wantProjected)
@@ -327,10 +329,10 @@ func TestHandleProjectedOneInFlightNoDoubleCount(t *testing.T) {
 	}
 }
 
-// panicWriter implementa http.ResponseWriter cujo Write entra em pânico,
-// exercitando o decremento via defer dentro da closure de tentativa. O
-// pânico ocorre APÓS o Inc e o recordAttempt, então o gauge precisa drenar
-// mesmo assim.
+// panicWriter is a response writer whose write panics, which exercises the
+// decrement through the deferred call inside the closure of the attempt. The
+// panic happens after the increase and the recording of the attempt, so the
+// meter has to drain anyway.
 type panicWriter struct{}
 
 func (panicWriter) Header() http.Header       { return http.Header{} }
@@ -386,9 +388,9 @@ func TestHandleErrorPathsDrainGauge(t *testing.T) {
 			if tc.serverCode != 0 || tc.hijack {
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if tc.hijack {
-						// Fecha a conexão sem resposta HTTP => erro de
-						// transporte determinístico e rápido (sem depender
-						// de recusa de porta/DNS do ambiente).
+						// Close the connection without an HTTP answer, which is a
+						// deterministic and fast transport error, without depending on a
+						// refused port or on the name resolution of the environment.
 						hj, ok := w.(http.Hijacker)
 						if !ok {
 							return
@@ -428,9 +430,10 @@ func TestHandleErrorPathsDrainGauge(t *testing.T) {
 	}
 }
 
-// TestLateSupersedePreservesCPUPctAvg prova que o late supersede preserva a
-// carga/custo capturados no dispatch (todo 5): CPUPctAvg (do parse de
-// resource_profile do todo 1), Inflight e ProjectedLoadPct sobrevivem.
+// TestLateSupersedePreservesCPUPctAvg proves that the late supersede preserves
+// the load and the cost captured at the dispatch: the average processor usage
+// from the resource profile, the requests in flight and the projected load all
+// survive.
 func TestLateSupersedePreservesCPUPctAvg(t *testing.T) {
 	h, err := history.NewHistory("", 100)
 	if err != nil {

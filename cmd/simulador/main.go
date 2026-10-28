@@ -9,7 +9,7 @@
 // The gateway, selectors, history and monitor are the production code; only
 // the node side of the wire is mocked. The -frio flag starts with empty
 // node pools so the first request pays a real cold start, -cloudfrio adds a
-// cold cloud tail, and -prime warms the history before the measured phase.
+// cold cloud tail, and -prime warms the history before the measured stage.
 package main
 
 import (

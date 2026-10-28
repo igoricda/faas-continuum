@@ -1,19 +1,20 @@
 package history
 
-// Regressão da decisão p95-sobre-sucessos (ADR-0007, AUD-01): Count e p95
-// cobrem só sucessos sem cold_start, então MinSamples conta sucessos
-// mínimos — segmento com zero sucessos nunca fica ready, mesmo sob rajada
-// de falhas rápidas ou timeouts longos.
+// Regression of the decision of the percentile over the successes: the count and
+// the percentile cover only the successes without a cold start, so the minimum
+// of samples counts the successes, and a segment with no success never becomes
+// ready, even under a burst of fast failures or long timeouts.
 
 import (
 	"testing"
 	"time"
 )
 
-// Cenário AUD-01: 20 falhas rápidas (500 em 5ms) + 5 timeouts longos não
-// tornam o segmento ready — Count/p95 exigem sucesso. Sem isso, o
-// self-learning preferia nó que nunca serviu (falha abaixa o p95, timeout
-// infla), com MinSamples atingido por tentativas cruas.
+// Scenario of the percentile over the successes: twenty fast failures and five
+// long timeouts do not make the segment ready, since the count and the percentile
+// require a success. Without this the self-learning would prefer a node that
+// never served, since a failure lowers the percentile and a timeout inflates it,
+// with the minimum of samples reached by the raw attempts.
 func TestStatsRequiresSuccessForReadiness(t *testing.T) {
 	h, err := NewHistory("", 1000)
 	if err != nil {
@@ -45,8 +46,9 @@ func TestStatsRequiresSuccessForReadiness(t *testing.T) {
 	}
 }
 
-// Cenário AUD-01: com sucessos presentes, falha rápida e timeout longo não
-// distorcem p95/Count — só os 3 sucessos (100, 120, 140ms) contam.
+// Scenario of the percentile over the successes: with the successes present, a
+// fast failure and a long timeout do not distort the percentile or the count,
+// and only the three successes count.
 func TestStatsSuccessOnlyP95(t *testing.T) {
 	h, err := NewHistory("", 1000)
 	if err != nil {

@@ -1,9 +1,10 @@
 package gateway
 
-// Enriquecimento do caminho síncrono (selflearning-cold-contention, todo 1):
-// cold_start/instance_id e resource_profile do bloco execution_metrics viram
-// campos da Entry de histórico. Decode tolerante — metrics nil (todo caminho
-// de erro), JSON inválido, tipo errado ou chave ausente => zeros, sem panic.
+// Enrichment of the synchronous path: the cold start flag, the instance
+// identifier and the resource profile of the execution metrics block become
+// fields of the history entry. The decoding is tolerant, so a nil blob, from
+// any error path, invalid JSON, a wrong type or a missing key give zeros and
+// never a panic.
 
 import (
 	"encoding/json"
@@ -18,8 +19,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// readInvRecords decodifica cada linha do invocation log JSONL como
-// InvocationRecord (Entry embutida achatada no JSON).
+// readInvRecords decodes each line of the invocation log as a record, with the
+// entry flattened in the JSON.
 func readInvRecords(t *testing.T, path string) []InvocationRecord {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -182,8 +183,9 @@ func TestColdEnrichAppendedEntry(t *testing.T) {
 	}
 }
 
-// TestColdEnrichExcludedFromP95Count prova a semântica AUD-01: a Entry cold
-// entra em RecentRPS/Total mas fica fora do p95/Count (p95-sobre-sucessos).
+// TestColdEnrichExcludedFromP95Count proves the semantics of a cold start: the
+// entry enters the recent rate and the total, and stays out of the percentile
+// and of the count, which cover only the successes.
 func TestColdEnrichExcludedFromP95Count(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	h, err := history.NewHistory("", 100)

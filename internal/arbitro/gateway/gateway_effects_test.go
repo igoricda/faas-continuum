@@ -1,20 +1,20 @@
 package gateway
 
-// Bateria de efeitos (adendo 2026-09-30, Passo 4.8): T4 (fail-fast cancela
-// pendências), T6a (teto de corpo na pendência), T7 (nó antigo = síncrono) e
-// T8 (pool/join sob concorrência). T1/T2/T3/T5/T6b vivem em
-// gateway_wait_test.go e gateway_headers_test.go (referenciados abaixo).
+// Battery of effects: the fail-fast cancels the pending reports, the ceiling of
+// the body applies to a pending report, an older node stays synchronous and the
+// pool and the join behave under concurrency. The other scenarios live in the
+// tests of the wait and of the headers, referenced below.
 //
-// T1 TestWaitDeliversLateSuccess — borda estoura a fatia e entrega depois.
-// T2 TestWaitFirstSuccessWins — névoa vence, borda cancelada.
-// T3 TestWaitLateFailureSettles — 503 tardio supersede o orcamento.
-// T5 TestWaitClientDisconnect — desconexão aborta sem escrever.
-// T6b TestWaitHardExpiryFallsThrough — prazo rígido cai em nuvem/failure.
+//   - the edge exceeds the slice and delivers later;
+//   - the fog wins and the edge is cancelled;
+//   - a late rejection supersedes the exceeded budget;
+//   - a client disconnection aborts without writing;
+//   - the hard deadline falls through to the cloud or to the failure.
 //
-// Gate test-audit: cada caso trava um invariante §6 ou um ramo fail-fast sem
-// dono. Regressões críveis: fail-fast que ignora órfãs (vazam até o cap),
-// framing tardio tratado como sucesso, nó antigo entrando no async, ou Put
-// do pool antes do join (corrupção de corpo). Sem seam novo.
+// Each case locks an invariant or a fail-fast branch. The credible regressions
+// are a fail-fast that ignores the orphans, which leak up to the ceiling, a late
+// framing treated as a success, an older node entering the asynchronous path, and
+// a release of the pool before the join, which corrupts the body.
 import (
 	"bytes"
 	"encoding/json"
@@ -35,11 +35,12 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// T4 (revisto em 2026-10-01/2): 401/400 síncrono responde imediato e a órfã
-// armada NÃO é cancelada — ela conclui depois, é assentada com o desfecho real
-// (aprendizado) e o contador de canceladas fica em zero. Antes, o fail-fast
-// matava a execução anunciada anterior na fila ("cold perpétuo" da bateria
-// arb8).
+// The revised fail-fast: a synchronous unauthorized or bad request answers
+// immediately and the armed orphan is not cancelled, so it completes later and is
+// settled with the real outcome, which feeds the learning, and the counter of
+// cancellations stays at zero. Previously the fail-fast killed the announced
+// execution that was ahead in the queue, which produced a perpetual cold start in
+// the measured batch.
 func TestFailFastKeepsArmedRunning(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -70,8 +71,7 @@ func TestFailFastKeepsArmedRunning(t *testing.T) {
 			}))
 			defer strict.Close()
 			ns, _ := nodes.NewNodeStore("")
-			// Nó anunciado antes do antigo: a órfã armada segue viva após o
-			// fail-fast (401/400) do nó seguinte.
+			// The announced node comes before the older one, and the armed orphan stays alive after the fail-fast of the next node.
 			_, _ = ns.Upsert(nodes.Node{NodeID: "a-slow", Layer: nodes.LayerBorda, Host: hostFromURL(t, slow.URL), Functions: []string{"fn"}, FunctionTimeoutMS: map[string]int{"fn": 15000}})
 			_, _ = ns.Upsert(nodes.Node{NodeID: "b-strict", Layer: nodes.LayerBorda, Host: hostFromURL(t, strict.URL), Functions: []string{"fn"}})
 			logPath := t.TempDir() + "/inv.jsonl"
@@ -92,7 +92,7 @@ func TestFailFastKeepsArmedRunning(t *testing.T) {
 			if armed, _, _, cancelled := gw.BestEffortCounters(); armed != 1 || cancelled != 0 {
 				t.Fatalf("armed=%d cancelled=%d want 1/0 (fail-fast não cancela mais)", armed, cancelled)
 			}
-			// Libera a órfã: o drain pós-resposta a assenta com o desfecho real.
+			// Release the orphan, so the drain after the answer settles it with the real outcome.
 			releaseArmed()
 			deadline := time.Now().Add(3 * time.Second)
 			for {
@@ -119,8 +119,8 @@ func TestFailFastKeepsArmedRunning(t *testing.T) {
 	}
 }
 
-// T6a: corpo > 8 MiB na pendência vira o mesmo erro do caminho síncrono
-// (502 NODE_ERROR, só invLog — framing não é registrável).
+// A body above the ceiling in a pending report gives the same error as the
+// synchronous path, which is a bad gateway attributed to the node and only in the log, since a framing error is not recordable.
 func TestLateOversizeBodyFraming(t *testing.T) {
 	large := bytes.Repeat([]byte("a"), 9*1024*1024)
 	bigJSON := append(append([]byte(`{"data":"`), large...), []byte(`"}`)...)
@@ -151,8 +151,8 @@ func TestLateOversizeBodyFraming(t *testing.T) {
 	}
 }
 
-// T7: alvo sem function_timeout_ms segue o caminho síncrono de hoje —
-// fatia estourada é 504 budget, sem entrega tardia (defensivo, não modo).
+// A target without a function timeout follows the synchronous path, so an
+// exceeded slice gives the timeout of the budget without a late delivery, which is the defensive behavior.
 func TestLegacyNodeStaysSynchronous(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
@@ -176,9 +176,9 @@ func TestLegacyNodeStaysSynchronous(t *testing.T) {
 	}
 }
 
-// T8: pool/join sob concorrência — N invokes concorrentes com inputs
-// distintos, todos armados e entregues tarde; cada corpo devolvido é o do
-// próprio invoke (o Put nunca recicla buffer lido por goroutine viva).
+// Pool and join under concurrency: several concurrent invocations with distinct
+// inputs, all armed and delivered late, where each returned body belongs to its
+// own invocation, since the release never recycles a buffer read by a live goroutine.
 func TestPooledBufferJoinUnderRace(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(50 * time.Millisecond)

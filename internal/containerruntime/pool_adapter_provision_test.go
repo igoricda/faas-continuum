@@ -29,7 +29,7 @@ type fakeAdapterContainer struct {
 
 func (c fakeAdapterContainer) ID() string { return c.id }
 
-// fakeAdapterRuntime fails on demand at a given phase, the creation or the
+// fakeAdapterRuntime fails on demand at a given stage, the creation or the
 // start, and counts the removals so that the best-effort cleanup of each
 // branch can be pinned.
 type fakeAdapterRuntime struct {

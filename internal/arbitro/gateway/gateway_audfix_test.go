@@ -1,11 +1,11 @@
 package gateway
 
-// Regressão do grupo gateway da auditoria 2026-09-17 (adendo ADR-0008
-// 2026-09-17): AUD-22 (árbitro-timeout vs função-timeout), AUD-23
-// (liveness≠sucesso), AUD-26 (zero-tentativas→504), AUD-27 (fanout
-// visível), AUD-29 (clock injetável no Handle), AUD-38 (400 fail-fast),
-// AUD-39 (retryability da causa raiz no cloud), AUD-42 (teto do invLog).
-// Cada teste ancora um cenário do documento de auditoria.
+// Regression group of the gateway from the audit: the arbiter timeout against
+// the function timeout, the liveness against the success, the absence of
+// attempts mapping to a timeout, the visible fan-out, the injectable clock in
+// the handler, the fail-fast of a bad request, the retryability of the root
+// cause in the cloud and the ceiling of the invocation log. Each test anchors
+// one scenario of the audit.
 
 import (
 	"context"
@@ -24,11 +24,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// Cenário AUD-22: SLO curto esgota o overall no meio da tentativa — o
-// erro deve classificar como orcamento_excedido, a resposta deve ser 504
-// retryable (não 502 atribuído ao nó) e, desde a emenda 2026-09-24, o
-// History registra a falha SEM LATÊNCIA (Total=1, p95 intocado) para o
-// crivo por previsão e o veto por taxa enxergarem a saturação.
+// Scenario of the arbiter timeout: a short objective exhausts the overall budget
+// in the middle of the attempt, so the error classifies as an exceeded budget,
+// the answer is a retryable timeout and not a bad gateway attributed to the
+// node, and the history records the failure without latency, so the guard by
+// prediction and the veto by rate see the saturation.
 func TestAuditFix_BudgetTimeoutVsFunctionTimeout(t *testing.T) {
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(300 * time.Millisecond)
@@ -75,12 +75,11 @@ func TestAuditFix_BudgetTimeoutVsFunctionTimeout(t *testing.T) {
 	if ok || count != 0 || p95 != 0 {
 		t.Fatalf("p95/Count contaminados por orcamento_excedido: count=%d p95=%d ok=%v", count, p95, ok)
 	}
-	// O árbitro desistir NA HORA (orcamento_excedido) é saturação, não o nó
-	// deixando de entregar: fica fora da taxa de serviço, senão o veto por
-	// taxa bania o nó que o árbitro não esperou (D1 — campanha arb4-*, em que
-	// o nó mais rápido ficou vetado com 97 amostras e 0 acertos).
-	// contagem por segmento em BRUTOS/arbitro/history.json: 61 + 20 + 16 nos
-	// buckets 0-10% / 25-50% / 50-75%, todos `orcamento_excedido`).
+	// The arbiter giving up is a saturation and not the node failing to deliver,
+	// so it stays out of the service rate, since otherwise the veto by rate would
+	// ban the node that the arbiter did not wait for, which happened in the
+	// measured campaign with the fastest node vetoed after ninety-seven samples
+	// without a success.
 	if total != 0 || rate != history.LaplaceRate(0, 0) {
 		t.Fatalf("total=%d rate=%v, esperado (0,%v): corte de orçamento é saturação", total, rate, history.LaplaceRate(0, 0))
 	}
@@ -92,9 +91,9 @@ func TestAuditFix_BudgetTimeoutVsFunctionTimeout(t *testing.T) {
 	}
 }
 
-// Cenário AUD-26: contexto já cancelado antes da 1ª tentativa — zero
-// tentativas deve mapear para 504 NO_NODE_AVAILABLE retryable, nunca o
-// 502 stale "internal error" do failure inicial.
+// Scenario of the absence of attempts: a context already cancelled before the
+// first attempt has to map to a retryable answer of no node available, and never
+// to the stale internal error of the initial failure.
 func TestAuditFix_ZeroAttemptsMapsTo504(t *testing.T) {
 	gw, _, _ := recordabilityFixture(t, http.StatusInternalServerError, func() []byte {
 		return []byte(`{"code":"X"}`)
@@ -115,9 +114,9 @@ func TestAuditFix_ZeroAttemptsMapsTo504(t *testing.T) {
 	}
 }
 
-// Cenário AUD-23: nó vivo que responde 503 contínuo deve ter LastSeen
-// atualizado (liveness) — sem Touch ele envelheceria até indisponivel e
-// causaria flapping de membership.
+// Scenario of the liveness: a live node that answers a continuous rejection
+// keeps its last seen instant updated, since without the touch it would age
+// until it became unavailable and would cause a flapping of the membership.
 func TestAuditFix_TouchOnOverloadResponse(t *testing.T) {
 	gw, _, _ := recordabilityFixture(t, http.StatusServiceUnavailable, func() []byte {
 		return []byte(`{"code":"POOL_EXHAUSTED"}`)
@@ -140,8 +139,8 @@ func TestAuditFix_TouchOnOverloadResponse(t *testing.T) {
 	}
 }
 
-// Cenário AUD-27: fila de 3 com maxRaceFanout=1 — o corte aparece no
-// contador FanoutCuts e só 1 tentativa acontece.
+// Scenario of the fan-out: a queue of three with a ceiling of one, so the cut
+// appears in the counter of cuts and only one attempt happens.
 func TestAuditFix_FanoutCutCounted(t *testing.T) {
 	var hits int32
 	mk := func() *httptest.Server {
@@ -180,8 +179,8 @@ func TestAuditFix_FanoutCutCounted(t *testing.T) {
 	}
 }
 
-// Cenário AUD-38: 400 do nó é determinístico — fail-fast imediato sem
-// failover para o próximo (como o 401), com 1 única tentativa total.
+// Scenario of the bad request: a rejection of the node is deterministic, so the
+// fail-fast is immediate, as for an unauthorized answer, with a single attempt.
 func TestAuditFix_BadRequestFailFast(t *testing.T) {
 	var hits int32
 	mk := func() *httptest.Server {
@@ -224,9 +223,9 @@ func TestAuditFix_BadRequestFailFast(t *testing.T) {
 	}
 }
 
-// Cenário AUD-39: CLOUD_FALLBACK_FAILED herda retryable da causa raiz da
-// fila — sobrecarga retryable continua retryable; 404 definitivo continua
-// definitivo.
+// Scenario of the cloud: the failure of the fallback inherits the retryability
+// of the root cause of the queue, so an overload stays retryable and a definitive
+// rejection stays definitive.
 func TestAuditFix_CloudPreservesRootRetryability(t *testing.T) {
 	cloudSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -270,9 +269,9 @@ func TestAuditFix_CloudPreservesRootRetryability(t *testing.T) {
 	}
 }
 
-// Cenário AUD-29: clock que avança 50ms por chamada — a latência da
-// tentativa (duas leituras consecutivas do clock, sem wall no meio)
-// deve ser exatamente 50ms, determinística.
+// Scenario of the injectable clock: a clock that advances fifty milliseconds per
+// call makes the latency of the attempt, which is the difference between two
+// consecutive readings without the wall clock in between, exactly fifty milliseconds.
 func TestAuditFix_AttemptLatencyFromInjectedClock(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -318,8 +317,9 @@ func TestAuditFix_AttemptLatencyFromInjectedClock(t *testing.T) {
 	}
 }
 
-// Cenário AUD-42: execution_metrics de ~100KiB vira stub truncado com o
-// tamanho original — a linha continua JSON válido e limitada a ~64KiB.
+// Scenario of the invocation log: a blob of execution metrics of about one
+// hundred kibibytes becomes a truncated stub with the original size, so the
+// line stays valid JSON and limited to sixty-four kibibytes.
 func TestAuditFix_InvocationLogMetricsCap(t *testing.T) {
 	logPath := t.TempDir() + "/invocations.jsonl"
 	l, err := NewInvocationLog(logPath)

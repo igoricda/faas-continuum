@@ -1,27 +1,28 @@
 package gateway
 
-// Timeout de ADMISSÃO vs timeout de SERVIÇO (D1 do plano
-// sinal-saturacao-selflearning). O 504 do nó carrega no corpo o ESTÁGIO em que
-// o prazo estourou, e só o nó sabe qual foi:
+// Admission timeout against service timeout. The timed out answer of the node
+// carries in the body the stage in which the deadline expired, and only the
+// node knows which one it was:
 //
-//	ACQUIRE_TIMEOUT             esperou fila/provisionamento; a função NUNCA
-//	                            executou — saturação de admissão
-//	INSTANCE_NOT_READY_TIMEOUT  o container subiu e não ficou pronto; a função
-//	                            NUNCA executou — saturação de admissão
-//	INVOCATION_TIMEOUT          a função executou e não respondeu — falha de
-//	                            serviço, esta SIM pode vetar o nó
+//	ACQUIRE_TIMEOUT             the request waited for the queue or for the
+//	                            provisioning and the function never ran, which
+//	                            is an admission saturation
+//	INSTANCE_NOT_READY_TIMEOUT  the container started and did not become
+//	                            ready and the function never ran, which is an
+//	                            admission saturation
+//	INVOCATION_TIMEOUT          the function ran and did not answer, which is
+//	                            a service failure that may veto the node
 //
-// Antes desta emenda o ramo 504 do dispatch não lia o corpo, e os três
-// colapsavam em ErrAttemptTimeout. Medido na campanha arb4-* (YOLO26n,
-// 29-30/09): a névoa emitia INVOCATION_TIMEOUT pelo caminho de aquisição, com
-// a latência travada no timeout_ms do próprio nó (15005-15425 ms),
-// `function_ms` nulo e o host a 2-10% de CPU com 36 contêineres vivos.
-// Contados como falha de serviço, os 264 de 531 pedidos davam
-// LaplaceRate(23,264)=0,090 — e vetavam o nó mais rápido do sistema.
+// Without this separation the timed out branch of the dispatch did not read the
+// body and the three stages collapsed into a single timeout error. In the
+// measured campaign the fog emitted an invocation timeout through the
+// acquisition path, with the latency stuck at the timeout of the node itself,
+// a null function time and the host at two to ten percent of processor usage
+// with thirty-six live containers. Counted as service failures, those requests
+// lowered the smoothed success rate and vetoed the fastest node of the system.
 //
-// O que estes testes fixam é o EFEITO no veto: o que nunca executou não pode
-// entrar na taxa de confiabilidade; o que executou e não respondeu continua
-// entrando.
+// These tests pin the effect on the veto: what never ran cannot enter the
+// reliability rate, and what ran and did not answer still enters it.
 
 import (
 	"errors"
@@ -38,8 +39,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// nodeTimeoutFixture monta um nó que responde 504 com o `code` informado no
-// corpo, e devolve o histórico onde a tentativa foi registrada.
+// nodeTimeoutFixture builds a node that answers timed out with the given code
+// in the body, and returns the history where the attempt was recorded.
 func nodeTimeoutFixture(t *testing.T, nodeCode string) *history.History {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -76,8 +77,8 @@ func nodeTimeoutFixture(t *testing.T, nodeCode string) *history.History {
 	return h
 }
 
-// lerServico devolve (total de serviço, taxa, saturação) do único segmento
-// gravado pela tentativa.
+// serviceReading returns the service total, the rate and the saturation of the
+// single segment recorded by the attempt.
 func lerServico(t *testing.T, h *history.History) (int, float64, int) {
 	t.Helper()
 	keys := h.Keys()
@@ -95,9 +96,10 @@ func lerServico(t *testing.T, h *history.History) (int, float64, int) {
 	return total, rate, full.Saturation
 }
 
-// TestTimeoutDeAdmissaoNaoContaComoFalhaDeServico: os dois estágios em que a
-// função NÃO executa ficam fora da taxa de confiabilidade e vão para
-// Saturation. É o reparo que impede o veto de banir o nó saturado.
+// TestTimeoutDeAdmissaoNaoContaComoFalhaDeServico covers the two stages in which
+// the function never runs, which stay out of the reliability rate and go to the
+// saturation counter. It is the repair that stops the veto from banning a
+// saturated node.
 func TestTimeoutDeAdmissaoNaoContaComoFalhaDeServico(t *testing.T) {
 	for _, code := range []string{"ACQUIRE_TIMEOUT", "INSTANCE_NOT_READY_TIMEOUT"} {
 		t.Run(code, func(t *testing.T) {
@@ -116,8 +118,8 @@ func TestTimeoutDeAdmissaoNaoContaComoFalhaDeServico(t *testing.T) {
 	}
 }
 
-// TestTimeoutDeFuncaoContinuaContandoComoFalhaDeServico é o contrapeso: sem
-// isto, o reparo do D1 viraria "nenhum timeout veta mais".
+// TestTimeoutDeFuncaoContinuaContandoComoFalhaDeServico is the counterweight:
+// without it the repair would become the rule that no timeout ever vetoes.
 func TestTimeoutDeFuncaoContinuaContandoComoFalhaDeServico(t *testing.T) {
 	h := nodeTimeoutFixture(t, "INVOCATION_TIMEOUT")
 	total, rate, sat := lerServico(t, h)
@@ -132,10 +134,10 @@ func TestTimeoutDeFuncaoContinuaContandoComoFalhaDeServico(t *testing.T) {
 	}
 }
 
-// TestTimeoutSemCorpoUtilCaiNoCaminhoDeServico: corpo truncado, vazio,
-// não-JSON ou com código desconhecido não pode ABSOLVER o nó — a ambiguidade
-// silenciada vira falha de serviço, que é o fail-safe certo (o Árbitro não
-// pode punir um nó por um dado que ele não conseguiu ler).
+// TestTimeoutSemCorpoUtilCaiNoCaminhoDeServico covers a truncated, empty,
+// non-JSON body or an unknown code, which cannot absolve the node: the silenced
+// ambiguity becomes a service failure, which is the correct fail-safe, since the
+// arbiter cannot punish a node for data it could not read.
 func TestTimeoutSemCorpoUtilCaiNoCaminhoDeServico(t *testing.T) {
 	casos := map[string]string{
 		"corpo vazio":       ``,
@@ -176,9 +178,9 @@ func TestTimeoutSemCorpoUtilCaiNoCaminhoDeServico(t *testing.T) {
 	}
 }
 
-// TestClassifyAdmissionTimeoutSoDoisCodigos fixa o contrato do mapeamento: só
-// os dois estágios de admissão entram; INVOCATION_TIMEOUT e qualquer outro
-// continuam no caminho de serviço.
+// TestClassifyAdmissionTimeoutSoDoisCodigos pins the mapping: only the two
+// admission stages enter, while the invocation timeout and any other code stay
+// in the service path.
 func TestClassifyAdmissionTimeoutSoDoisCodigos(t *testing.T) {
 	for _, code := range []string{"ACQUIRE_TIMEOUT", "INSTANCE_NOT_READY_TIMEOUT"} {
 		err, ok := classifyAdmissionTimeout(code, "n1", "msg")

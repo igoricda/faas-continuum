@@ -5,11 +5,12 @@ import (
 	"time"
 )
 
-// TestExpectedCostCacheExactWhenOldestAgesOut prova que o cache é EXATO sob
-// relógio avançando sem mutação: em T1 a amostra mais antiga sai da janela e
-// o resultado cacheado deve coincidir com uma computação fresca. O cache
-// antigo (TTL computedAt+window) devolveria a média stale (20) porque
-// T1 < computedAt+window.
+// TestExpectedCostCacheExactWhenOldestAgesOut proves that the cache is exact
+// under a clock that advances without a mutation: at the first instant the
+// oldest sample leaves the window and the cached result has to match a fresh
+// computation. A cache with a time to live counted from the computation would
+// return the stale average, because the first instant is still within the time
+// to live.
 func TestExpectedCostCacheExactWhenOldestAgesOut(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	const window = 10 * time.Second
@@ -67,9 +68,11 @@ func TestExpectedCostCacheExactWhenOldestAgesOut(t *testing.T) {
 		t.Fatalf("oldest cacheado = %v, esperado %v", entry.oldest, wantOldest)
 	}
 
-	// T1 = T0+2s: a amostra de 9s passa a 11s (>window) e sai; as de 5s/1s
-	// viram 7s/3s e permanecem. T1 ainda está dentro de computedAt+window
-	// (T0+10s), logo o TTL antigo daria hit stale (20).
+	// The first instant is two seconds after the start, so the sample of nine
+	// seconds becomes eleven and leaves, while the ones of five and one seconds
+	// become seven and three and remain. The first instant is still within the
+	// time to live counted from the computation, so the old rule would return the
+	// stale value.
 	t1 := now.Add(2 * time.Second)
 	fresh := mk()
 	wantCost, wantN, wantOK, _ := fresh.ExpectedCost("grp", "n1", window, t1)
@@ -86,11 +89,12 @@ func TestExpectedCostCacheExactWhenOldestAgesOut(t *testing.T) {
 	}
 }
 
-// TestExpectedCostCacheFutureEntryEnters prova que o cache NÃO reutiliza um
-// resultado que excluiu uma entry futuro-relativa ao now do cálculo quando um
-// now posterior alcança o timestamp dessa entry (mesmo gen, sem mutação): a
-// entry deve então entrar. O cache antigo (TTL computedAt+window) devolveria o
-// negativo cacheado para sempre.
+// TestExpectedCostCacheFutureEntryEnters proves that the cache does not reuse a
+// result that excluded an entry in the future relative to the instant of the
+// computation, when a later instant reaches the timestamp of that entry, with
+// the same generation and without a mutation: the entry has to enter then. A
+// cache with a time to live counted from the computation would return the
+// negative value forever.
 func TestExpectedCostCacheFutureEntryEnters(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	const window = 60 * time.Second
@@ -100,8 +104,9 @@ func TestExpectedCostCacheFutureEntryEnters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHistory: %v", err)
 	}
-	// E é futuro-relativa ao primeiro `now` (ts = now+5s) mas elegível
-	// (solo+PSI em ambos os eixos, gate todo 11).
+	// The entry is in the future relative to the first instant, five seconds
+	// ahead, and it is eligible, since it is solo and the pressure is positive on
+	// both axes.
 	if err := h.AppendWithGroup(Entry{
 		FunctionName:      "grp",
 		NodeID:            "n1",
@@ -138,12 +143,12 @@ func TestExpectedCostCacheFutureEntryEnters(t *testing.T) {
 	}
 }
 
-// TestExpectedCostAppendToOtherPairKeepsCache prova o isolamento por par
-// (grupo,nó) do contador de geração: anexar ao par B (grupo,n2) NÃO pode
-// invalidar o cache do par A (grupo,n1). A observação é o computedAt da
-// entry cacheada de A, que só muda numa republicação. Com o contador global
-// antigo, o append em B incrementava a geração global e forçava recomputação
-// (computedAt virava now2).
+// TestExpectedCostAppendToOtherPairKeepsCache proves the isolation of the
+// generation counter per pair of group and node: appending to a second pair
+// cannot invalidate the cache of the first pair. The observation is the
+// computation instant of the cached entry of the first pair, which only changes
+// on a republication. With the old global counter, the append in the second pair
+// incremented the global generation and forced a recomputation.
 func TestExpectedCostAppendToOtherPairKeepsCache(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	const window = 60 * time.Second
@@ -188,7 +193,7 @@ func TestExpectedCostAppendToOtherPairKeepsCache(t *testing.T) {
 		t.Fatalf("computedAt cacheado = %v, esperado %v", entry.computedAt, now)
 	}
 
-	// Append ao par B: não deve tocar a geração do par A.
+	// The append to the second pair must not touch the generation of the first pair.
 	appendSolo("n2", 99)
 
 	now2 := now.Add(2 * time.Second)
@@ -211,9 +216,9 @@ func TestExpectedCostAppendToOtherPairKeepsCache(t *testing.T) {
 	}
 }
 
-// TestExpectedCostSamePairAppendInvalidates prova que anexar ao MESMO par
-// ainda invalida (o contador por par cobre a autoria do próprio par): a
-// amostra nova entra no resultado, sem hit stale.
+// TestExpectedCostSamePairAppendInvalidates proves that appending to the same
+// pair still invalidates, since the counter per pair covers the authorship of
+// the pair itself: the new sample enters the result, with no stale hit.
 func TestExpectedCostSamePairAppendInvalidates(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	const window = 60 * time.Second
@@ -247,10 +252,11 @@ func TestExpectedCostSamePairAppendInvalidates(t *testing.T) {
 	}
 }
 
-// TestExpectedCostAggregateAppendBumpsOnlyPair prova que o fan-out agregado
-// (AggLayerKey) não cria/incrementa contador de geração: ExpectedCost ignora
-// chaves agregadas, então só o par (grupo,nó) primário conta. Um append com
-// Layer preenchido grava as DUAS chaves mas incrementa UM único par.
+// TestExpectedCostAggregateAppendBumpsOnlyPair proves that the aggregated
+// fan-out creates no generation counter and increments none, since the expected
+// cost ignores the aggregated keys, so only the primary pair of group and node
+// counts. An append with a layer filled writes the two keys but increments a
+// single pair.
 func TestExpectedCostAggregateAppendBumpsOnlyPair(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	sc := ScenarioContext{LoadBucket: Bucket0_10}
@@ -276,9 +282,9 @@ func TestExpectedCostAggregateAppendBumpsOnlyPair(t *testing.T) {
 	}
 }
 
-// TestSupersedeBumpsPair prova que Supersede incrementa a geração do par
-// extraído da chave primária (group\x00node\x00bucket) e que um Supersede em
-// chave AGREGADA não mexe em contador algum.
+// TestSupersedeBumpsPair proves that the supersede increments the generation of
+// the pair extracted from the primary key, and that a supersede on an aggregated
+// key touches no counter at all.
 func TestSupersedeBumpsPair(t *testing.T) {
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	sc := ScenarioContext{LoadBucket: Bucket0_10}
@@ -311,7 +317,7 @@ func TestSupersedeBumpsPair(t *testing.T) {
 		t.Fatalf("Supersede agregado alterou contadores: par=%d->%d, total=%d", before, afterAgg, aggCounters)
 	}
 
-	// Supersede em chave primária: incrementa o contador do par.
+	// A supersede on the primary key increments the counter of the pair.
 	if !h.Supersede(SegmentKey("grp", "n1", sc), func(Entry) bool { return true }) {
 		t.Fatal("Supersede primário deveria remover a entry")
 	}

@@ -13,9 +13,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// TestLateColdStartApplied cobre o cold_start do late (selflearning-cold-
-// contention, todo 4): o relatório cold marcar ColdStart=true na Entry, o
-// que a exclui do p95/Count e a mantém em Recent/Total (AUD-01).
+// TestLateColdStartApplied covers the cold start flag of the late report: a cold
+// report marks the entry as a cold start, which excludes it from the percentile
+// and from the count and keeps it in the recent rate and in the total.
 func TestLateColdStartApplied(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -56,9 +56,9 @@ func TestLateColdStartApplied(t *testing.T) {
 	}
 }
 
-// TestLateColdAbsentBackCompat é a regressão de compatibilidade do fio: um
-// payload antigo SEM a chave cold_start decodifica false e a Entry sai warm
-// (comportamento pré-campo preservado).
+// TestLateColdAbsentBackCompat is the compatibility regression of the wire: an
+// older payload without the cold start key decodes as false and the entry stays
+// warm, which preserves the behavior before the field existed.
 func TestLateColdAbsentBackCompat(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -92,11 +92,12 @@ func TestLateColdAbsentBackCompat(t *testing.T) {
 	}
 }
 
-// TestLateSegmentInheritance cobre a herança de segmento (todo 4): o late
-// do MESMO attempt do sync supersede a Entry síncrona no segmento que o sync
-// usou (herdado via liveRef), mesmo quando o relatório, sozinho, cairia
-// noutro bucket. Sem herança o late iria para 75+ e deixaria a Entry
-// síncrona intacta (dupla contagem e segmento errado).
+// TestLateSegmentInheritance covers the inheritance of the segment: the late
+// report of the same attempt supersedes the synchronous entry in the segment
+// that the synchronous path used, which it inherits through the live reference,
+// even when the report alone would fall into another bucket. Without the
+// inheritance the late report would go to a higher bucket and leave the
+// synchronous entry intact, which is a double count in the wrong segment.
 func TestLateSegmentInheritance(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -147,9 +148,9 @@ func TestLateSegmentInheritance(t *testing.T) {
 	}
 }
 
-// TestRecordLateOrphanScenario garante que um late ÓRFÃO (sem liveRef, sem
-// attempt síncrono correlacionado) continua derivando o cenário real via
-// lateScenario e gravando no bucket correspondente.
+// TestRecordLateOrphanScenario guarantees that an orphan late report, without a
+// live reference and without a correlated synchronous attempt, keeps deriving
+// the real scenario and records it in the corresponding bucket.
 func TestRecordLateOrphanScenario(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -251,12 +252,13 @@ func TestRecordLate(t *testing.T) {
 	}
 }
 
-// TestLatePSI cobre o fio tardio de PSI (selflearning-telemetry-seeded-
-// history, todo 8): LateReport aditivo omitempty, herança correlacionada via
-// take único (liveRef vence o corpo, consistente com D12), derivação órfã
-// (corpo > mon.Latest > unknown, sem panic) e escrita 1x sob retry
-// concorrente. InstanceID do late segue "" e dedup (request_id,attempt_n)
-// + TTL 5m + bound 10k ficam intocados.
+// TestLatePSI covers the late wire of the pressure data: the late report has the
+// two optional fields, the correlated inheritance happens through a single take,
+// where the live reference wins over the body, an orphan derivation takes the
+// body, then the latest telemetry, then unknown, without a panic, and the write
+// happens once under a concurrent retry. The instance identifier of the late
+// report stays empty, and the deduplication by request and attempt, the time to
+// live and the bound stay untouched.
 func TestLatePSI(t *testing.T) {
 	newCorrelatedGW := func(t *testing.T, mon *monitor.Monitor) (*Gateway, *history.History, string) {
 		t.Helper()
@@ -317,7 +319,7 @@ func TestLatePSI(t *testing.T) {
 		if !applied {
 			t.Fatalf("applied=false, want true (primeiro late do par)")
 		}
-		// Mesmo segmento, sem dupla contagem, nas duas chaves do fan-out.
+		// The same segment, without a double count, in the two keys of the fan-out.
 		now := time.Now()
 		for _, key := range []string{
 			history.SegmentKey("f", "n1", sc),
@@ -343,7 +345,7 @@ func TestLatePSI(t *testing.T) {
 		if late.InstanceID != "" {
 			t.Errorf("late InstanceID=%q, want \"\"", late.InstanceID)
 		}
-		// Take único: segundo consumo miss; retry é dedup (applied=false).
+		// A single take: the second consumption misses, and the retry is deduplicated.
 		if _, ok := gw.liveIdx.take("req-psi", 1); ok {
 			t.Errorf("segundo take devolveu liveRef (take único quebrado)")
 		}

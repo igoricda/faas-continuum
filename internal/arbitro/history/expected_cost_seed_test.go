@@ -1,21 +1,21 @@
 package history
 
-// Cobertura do ExpectedCost com gate PSI + seed de camada (todo 11,
-// selflearning-telemetry-seeded-history).
+// Coverage of the expected cost with the pressure gate and the layer seed.
 //
-// Convenção de seed (helper abaixo): amostras solo+PSI elegíveis
-// (Inflight==1, CPUPctAvg>0, warm, sucesso, PSI>0 nos dois eixos) com Layer
-// preenchido — que é o que gera o fan-out AggLayerKey consumido pela perna
-// de seed. O nó "thin" nunca tem solo elegível própria; o doador alimenta o
-// prior da camada.
+// Convention of the seed, in the helper below: eligible samples with one
+// request in flight, a positive processor usage, a warm instance, a success and
+// a positive pressure on both axes, with the layer filled, which is what
+// produces the aggregated fan-out consumed by the seeding branch. The thin node
+// never has an eligible solo sample of its own, and the donor feeds the prior of
+// the layer.
 
 import (
 	"testing"
 	"time"
 )
 
-// seedCostEntry grava uma entry solo+PSI elegível (salvo overrides) para
-// (fn, node, layer, bucket).
+// seedCostEntry records an eligible solo sample, except for the overrides, for a
+// given function, node, layer and bucket.
 func seedCostEntry(t *testing.T, h *History, fn, node, layer, bucket string, cpu float64, now time.Time) {
 	t.Helper()
 	e := Entry{
@@ -46,9 +46,9 @@ func TestExpectedCostSeed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewHistory: %v", err)
 		}
-		// Doador borda: 2 solo elegíveis (20, 40) + poluição que NUNCA pode
-		// entrar no seed: contended (Inflight 2, cpu 9999), cold (cpu 9999)
-		// e PSI==0 (cpu 9999) — todos com Layer para caírem no fan-out.
+		// The donor at the edge: two eligible solo samples plus pollution that must
+		// never enter the seed, which are a contended sample, a cold one and one
+		// without pressure, all with a layer so that they fall into the fan-out.
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket0_10, 20, now)
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket50_75, 40, now)
 		for _, e := range []Entry{
@@ -60,8 +60,7 @@ func TestExpectedCostSeed(t *testing.T) {
 				t.Fatalf("AppendWithGroup poluição: %v", err)
 			}
 		}
-		// Thin tem SÓ contended com Layer (sonda a camada + prova exclusão
-		// da perna local).
+		// The thin node has only contended samples with a layer, which probes the layer and proves the exclusion of the local branch.
 		if err := h.AppendWithGroup(Entry{
 			FunctionName: fn, NodeID: "thin", Layer: "borda", Timestamp: now,
 			ScenarioContext: ScenarioContext{LoadBucket: Bucket0_10}, ObservedLatencyMS: 100,
@@ -84,7 +83,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		}
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket0_10, 20, now)
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket0_10, 40, now)
-		// Thin COM solo própria: local vence, seed ignorado.
+		// The thin node with a solo sample of its own: the local sample wins and the seed is ignored.
 		seedCostEntry(t, h, fn, "thin", "borda", Bucket0_10, 100, now)
 
 		cost, n, ok, seeded := h.ExpectedCost(fn, "thin", window, now)
@@ -100,8 +99,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		}
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket0_10, 20, now)
 		seedCostEntry(t, h, fn, "donor", "borda", Bucket0_10, 40, now)
-		// Thin com solo de CPU alta mas PSI==0: fora da perna local (não
-		// conta, não bloqueia o seed) — cai no prior da camada.
+		// The thin node with a solo sample of a high processor usage but without pressure stays out of the local branch, since it neither counts nor blocks the seed, and falls back to the prior of the layer.
 		if err := h.AppendWithGroup(Entry{
 			FunctionName: fn, NodeID: "thin", Layer: "borda", Timestamp: now,
 			ScenarioContext: ScenarioContext{LoadBucket: Bucket0_10}, ObservedLatencyMS: 100,
@@ -123,7 +121,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		}
 		seedCostEntry(t, h, fn, "donor-b", "borda", Bucket0_10, 30, now)
 		seedCostEntry(t, h, fn, "donor-n", "nevoa", Bucket0_10, 1000, now)
-		// Thin sonda borda (contended com Layer): seed só da borda.
+		// The thin node probes the edge with a contended sample that has a layer, so the seed comes only from the edge.
 		if err := h.AppendWithGroup(Entry{
 			FunctionName: fn, NodeID: "thin", Layer: "borda", Timestamp: now,
 			ScenarioContext: ScenarioContext{LoadBucket: Bucket0_10}, ObservedLatencyMS: 100,
@@ -161,7 +159,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		if err != nil {
 			t.Fatalf("NewHistory: %v", err)
 		}
-		// Contended-only sem Layer: nem local, nem fan-out => (0,0,false).
+		// Without a layer, the contended samples reach neither the local branch nor the fan-out, which gives zero, zero and false.
 		if err := h.AppendWithGroup(Entry{
 			FunctionName: fn, NodeID: "thin", Timestamp: now,
 			ScenarioContext: ScenarioContext{LoadBucket: Bucket0_10}, ObservedLatencyMS: 100,
@@ -173,7 +171,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		if cost, n, ok, seeded := h.ExpectedCost(fn, "thin", window, now); ok || n != 0 || cost != 0 || seeded {
 			t.Fatalf("sem-camada = (%v,%d,%v,seeded=%v), esperado (0,0,false,false)", cost, n, ok, seeded)
 		}
-		// Histórico vazio => idem.
+		// An empty history gives the same result.
 		h2, err := NewHistory("", 1000)
 		if err != nil {
 			t.Fatalf("NewHistory: %v", err)
@@ -195,7 +193,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		if !ok || !seeded || n != 2 || cost != 30 {
 			t.Fatalf("seed = (%v,%d,%v,seeded=%v), esperado (30,2,true,true)", cost, n, ok, seeded)
 		}
-		// Hit memorizado com seeded=true sob a mesma geração do par.
+		// A memorized hit with the seeded flag under the same generation of the pair.
 		h.mu.RLock()
 		entry, hit := h.costCache[fn+"\x00thin"]
 		h.mu.RUnlock()
@@ -205,12 +203,12 @@ func TestExpectedCostSeed(t *testing.T) {
 		if !entry.seeded || !entry.ok || entry.n != 2 || entry.mean != 30 {
 			t.Fatalf("cache = %+v, esperado {ok seeded n=2 mean=30}", entry)
 		}
-		// Segundo query no mesmo now serve o hit (sem recomputação).
+		// A second query at the same instant serves the hit, without a recomputation.
 		if cost2, n2, ok2, seeded2 := h.ExpectedCost(fn, "thin", window, now); cost2 != 30 || n2 != 2 || !ok2 || !seeded2 {
 			t.Fatalf("hit = (%v,%d,%v,seeded=%v), esperado (30,2,true,true)", cost2, n2, ok2, seeded2)
 		}
-		// Append de solo no par bumpa a geração e o seed evapora: vira
-		// média local medida.
+		// An append of a solo sample in the pair bumps the generation and the seed
+		// evaporates, becoming a measured local average.
 		seedCostEntry(t, h, fn, "thin", "borda", Bucket0_10, 100, now)
 		cost3, n3, ok3, seeded3 := h.ExpectedCost(fn, "thin", window, now)
 		if !ok3 || seeded3 || n3 != 1 || cost3 != 100 {

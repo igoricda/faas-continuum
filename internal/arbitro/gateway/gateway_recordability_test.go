@@ -1,9 +1,9 @@
 package gateway
 
-// Regressão do grupo History/recordability (ADR-0007, AUD-01/AUD-21/AUD-30):
-// cada classe sem medida real de performance vai só para o invLog, nunca
-// para o History; p95/Count refletem custo de sucesso. Cada teste abaixo
-// ancora um cenário do documento de auditoria.
+// Regression group of the recordability: each class without a real measurement of
+// performance goes only to the invocation log and never to the history, while the
+// percentile and the count reflect the cost of a success. Each test below anchors
+// one scenario.
 
 import (
 	"encoding/json"
@@ -20,8 +20,8 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// recordabilityFixture monta gateway com History + invLog para os cenários
-// abaixo. Devolve o gateway, o histórico e o caminho do JSONL.
+// recordabilityFixture builds a gateway with a history and a log for the scenarios
+// below, and returns the gateway, the history and the path of the log.
 func recordabilityFixture(t *testing.T, nodeStatus int, nodeBody func() []byte) (*Gateway, *history.History, string) {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +54,7 @@ func recordabilityFixture(t *testing.T, nodeStatus int, nodeBody func() []byte) 
 	return gw, h, logPath
 }
 
-// invokeRecordability executa um invoke e devolve o status gravado.
+// invokeRecordability runs an invocation and returns the recorded status.
 func invokeRecordability(t *testing.T, gw *Gateway) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(`{"function":"fn","input":{"a":1}}`))
@@ -63,7 +63,7 @@ func invokeRecordability(t *testing.T, gw *Gateway) *httptest.ResponseRecorder {
 	return rec
 }
 
-// invLogOutcomes lê os outcomes registrados no JSONL.
+// invLogOutcomes reads the outcomes recorded in the log.
 func invLogOutcomes(t *testing.T, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -84,8 +84,9 @@ func invLogOutcomes(t *testing.T, path string) []string {
 	return out
 }
 
-// Cenário AUD-01 (401): token errado/expirado (~1ms) não pode poluir
-// Count/p95 — fail-fast com History vazio e 1 linha falha no invLog.
+// An unauthorized answer, from a wrong or expired token, takes about a millisecond
+// and cannot pollute the count or the percentile, so the fail-fast leaves the
+// history empty and writes one failed line in the log.
 func TestRecordability401StaysOutOfHistory(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusUnauthorized, func() []byte {
 		return []byte(`{"code":"UNAUTHORIZED"}`)
@@ -102,8 +103,8 @@ func TestRecordability401StaysOutOfHistory(t *testing.T) {
 	}
 }
 
-// Cenário AUD-01 (404): mapa obsoleto num único nó esgota a fila —
-// FUNCTION_NOT_FOUND final sem treinar o History; invLog guarda a falha.
+// A stale map in a single node exhausts the queue, so the final not found answer
+// does not train the history while the log keeps the failure.
 func TestRecordability404StaysOutOfHistory(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusNotFound, func() []byte {
 		return []byte(`{"code":"FUNCTION_NOT_FOUND"}`)
@@ -123,8 +124,9 @@ func TestRecordability404StaysOutOfHistory(t *testing.T) {
 	}
 }
 
-// Cenário AUD-01 (framing): 2xx com corpo acima de 8 MiB não é medida do
-// nó — History vazio, invLog com a falha; contrato segue 502 NODE_ERROR.
+// A success with a body above the ceiling is not a measurement of the node, so the
+// history stays empty and the log keeps the failure, while the contract stays a bad
+// gateway attributed to the node.
 func TestRecordabilityResponseTooLargeStaysOutOfHistory(t *testing.T) {
 	big := make([]byte, (8<<20)+1)
 	for i := range big {
@@ -146,8 +148,8 @@ func TestRecordabilityResponseTooLargeStaysOutOfHistory(t *testing.T) {
 	}
 }
 
-// Cenário AUD-01 (framing): 2xx com corpo não-JSON não é medida do nó —
-// History vazio, invLog com a falha.
+// A success with a non-JSON body is not a measurement of the node, so the history
+// stays empty and the log keeps the failure.
 func TestRecordabilityInvalidJSONStaysOutOfHistory(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusOK, func() []byte {
 		return []byte(`{não-json`)
@@ -164,8 +166,8 @@ func TestRecordabilityInvalidJSONStaysOutOfHistory(t *testing.T) {
 	}
 }
 
-// Cenário AUD-01 (falha genérica): 500 rápido (5ms) não pode abaixar o p95
-// — nó doente pareceria rápido. History vazio; contrato segue 502.
+// A fast generic failure of a few milliseconds cannot lower the percentile,
+// since a sick node would look fast. The history stays empty and the contract stays a bad gateway.
 func TestRecordabilityNode500StaysOutOfHistory(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusInternalServerError, func() []byte {
 		return []byte(`oops`)
@@ -182,9 +184,9 @@ func TestRecordabilityNode500StaysOutOfHistory(t *testing.T) {
 	}
 }
 
-// Cenário AUD-21 (timeout legítimo): 504 real do nó treina o History com
-// outcome timeout (contrato 504 NODE_INVOCATION_TIMEOUT preservado) — mas
-// fora do p95/Count, que refletem custo de sucesso.
+// A legitimate timeout trains the history with a timeout outcome, which keeps
+// the contract of the node timeout, but stays outside the percentile and the
+// count, which reflect the cost of a success.
 func TestRecordabilityNode504TrainsHistoryAsTimeout(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusGatewayTimeout, func() []byte {
 		return []byte(`{"code":"INVOCATION_TIMEOUT"}`)
@@ -204,15 +206,14 @@ func TestRecordabilityNode504TrainsHistoryAsTimeout(t *testing.T) {
 	}
 }
 
-// Emenda 2026-09-24 (AUD-01 revisitado): rejeição de capacidade (503
-// POOL_EXHAUSTED) passa a treinar o History como FALHA SEM LATÊNCIA —
-// Total/SuccessRate/VetoByRate enxergam a saturação da borda; p95/Count
-// seguem só com sucesso. O contrato HTTP continua 503 NODE_OVERLOADED.
-// Rejeição de capacidade é SATURAÇÃO, não falta de confiabilidade: o nó está
-// recusando corretamente o que não dá conta (plano-sinal-saturacao-selflearning
-// D1). O contrato é que a tentativa continue GRAVADA e fora do p95 — e que
-// NÃO derrube a taxa de serviço, porque foi exatamente isso que fez o veto
-// banir o nó mais rápido da campanha arb4-*.
+// A capacity rejection, of an exhausted pool, trains the history as a failure
+// without latency, so the total, the success rate and the veto by rate see the
+// saturation of the edge, while the percentile and the count keep only the
+// successes. The HTTP contract stays a rejection marked as an overload.
+// The rejection is a saturation and not a lack of reliability, since the node is
+// correctly refusing what it cannot handle. The attempt stays recorded and
+// outside the percentile, and it must not lower the service rate, since that is
+// what made the veto ban the fastest node of the campaign.
 func TestRecordabilityCapacityTrainsHistoryAsSaturation(t *testing.T) {
 	gw, h, logPath := recordabilityFixture(t, http.StatusServiceUnavailable, func() []byte {
 		return []byte(`{"code":"POOL_EXHAUSTED"}`)
@@ -243,8 +244,8 @@ func TestRecordabilityCapacityTrainsHistoryAsSaturation(t *testing.T) {
 	}
 }
 
-// Cenário AUD-30: rejeição sem nó disponível grava falha com slo_met=false
-// (fora do domínio de tentativa real, latência 0 não é SLO cumprido).
+// Scenario of the absence of a node: a rejection without an available node
+// records a failure with an unmet objective, since outside the domain of a real attempt a zero latency is not a met objective.
 func TestRecordNoNodeWritesSloMetFalse(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	now := time.Now().UTC().Truncate(time.Millisecond)

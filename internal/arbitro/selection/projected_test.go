@@ -12,10 +12,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// appendClassEntries grava n entradas de sucesso com classe explícita
-// (inflight), amostra de CPU e PSI em ambos os eixos — o invariante
-// solo+PSI do ExpectedCost (psiSoloEligible: Inflight==1, CPUPctAvg>0,
-// !ColdStart, sucesso e PSI>0 nos dois eixos).
+// appendClassEntries records successful entries with an explicit class, which
+// is the number of requests in flight, a sample of processor usage and a
+// pressure on both axes, which satisfies the solo invariant of the expected
+// cost: one request in flight, a positive processor usage, a warm instance, a
+// success and a positive pressure on both axes.
 func appendClassEntries(t *testing.T, h *history.History, fn, nodeID, bucket string, lat int64, inflight int, cpuPct float64, n int, now time.Time) {
 	t.Helper()
 	for i := 0; i < n; i++ {
@@ -36,9 +37,10 @@ func appendClassEntries(t *testing.T, h *history.History, fn, nodeID, bucket str
 	}
 }
 
-// TestEffectiveContentionFactor pina o predicado do fator APRENDIDO
-// (clamp[1,8], pisos por classe): o history_summary do server consome o
-// MESMO predicado via MinClassSamples exportado.
+// TestEffectiveContentionFactor pins the predicate of the learned factor, with
+// the clamp between one and eight and the floors per class: the summary of the
+// history in the server consumes the same predicate through the exported
+// minimum of samples per class.
 func TestEffectiveContentionFactor(t *testing.T) {
 	cases := []struct {
 		name                          string
@@ -74,16 +76,17 @@ func TestEffectiveContentionFactor(t *testing.T) {
 	}
 }
 
-// TestProjectedLoadFormula pinna a fórmula ÚNICA de carga projetada
-// (observed + custo em voo desde recvAt + custo próprio): a mesma do
-// record do gateway e do SHIELD do RiskSelector. Nil-safe em todos os
-// leitores (Mon/Hist/gauges nil => projected 0 => bucket unknown).
+// TestProjectedLoadFormula pins the single formula of the projected load, which
+// is the observed load plus the cost in flight since the reception plus the own
+// cost, the same formula of the recording in the gateway and of the shield of
+// the risk selector. It is nil safe in every reader, so a nil monitor, history
+// or meter gives a zero projection and an unknown bucket.
 func TestProjectedLoadFormula(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	group, nodeID := "myfn", "n1"
 
 	h, _ := history.NewHistory("", 500)
-	// Custo próprio: média de CPUPctAvg sobre entradas solo (Inflight==1).
+	// The own cost is the average of the processor usage over the solo entries.
 	appendClassEntries(t, h, group, nodeID, history.Bucket0_10, 100, 1, 20, 3, now)
 
 	mon := monitor.NewMonitor()
@@ -105,7 +108,7 @@ func TestProjectedLoadFormula(t *testing.T) {
 	if recvAt.IsZero() {
 		t.Fatal("recvAt deveria vir do monitor (relógio do servidor na ingestão)")
 	}
-	// 30 (observada) + 10 (voo desde recvAt) + 20 (custo próprio) = 60.
+	// Thirty of observed load plus ten in flight plus twenty of own cost give sixty.
 	if projected != 60 {
 		t.Fatalf("projected=%v want 60 (30+10+20)", projected)
 	}
@@ -113,27 +116,27 @@ func TestProjectedLoadFormula(t *testing.T) {
 		t.Fatalf("bucket=%q want %q (derivado de projected)", sc.LoadBucket, history.LoadBucket(60))
 	}
 
-	// Nil-safe: sem Mon/Hist/gauge => projected 0 e bucket unknown.
+	// Nil safe: without a monitor, a history or a meter the projection is zero and the bucket is unknown.
 	_, _, _, projected, sc = projectedLoad(nil, nil, nil, group, nodeID, time.Minute, now)
 	if projected != 0 || sc.LoadBucket != history.BucketUnknown {
 		t.Fatalf("nil-safe: projected=%v bucket=%q want 0/unknown", projected, sc.LoadBucket)
 	}
 
-	// Só telemetria, sem histórico/gauge: observed puro.
+	// With telemetry only, without history or meter, the projection is the observed load.
 	_, _, _, projected, _ = projectedLoad(mon, nil, nil, group, nodeID, time.Minute, now)
 	if projected != 30 {
 		t.Fatalf("só observada: projected=%v want 30", projected)
 	}
 }
 
-// TestProjectedLoadSoloNuncaEntraNoCusto confirma o invariante do
-// ExpectedCost: entradas contendidas (Inflight>1) NÃO entram na média do
-// custo próprio (o estimador seria circular).
+// TestProjectedLoadSoloNuncaEntraNoCusto confirms the invariant of the expected
+// cost: contended entries, with more than one request in flight, do not enter
+// the average of the own cost, since the estimator would be circular.
 func TestProjectedLoadSoloNuncaEntraNoCusto(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	group, nodeID := "myfn", "n1"
 	h, _ := history.NewHistory("", 500)
-	// 5 solos a 20% e 5 contidos a 90%: a média só pode ver os solos.
+	// Five solo entries at twenty percent and five contended at ninety percent, so the average sees only the solo ones.
 	appendClassEntries(t, h, group, nodeID, history.Bucket0_10, 100, 1, 20, 5, now)
 	appendClassEntries(t, h, group, nodeID, history.Bucket0_10, 900, 2, 90, 5, now)
 	cost, _, _, _ := h.ExpectedCost(group, nodeID, time.Minute, now)
@@ -142,8 +145,9 @@ func TestProjectedLoadSoloNuncaEntraNoCusto(t *testing.T) {
 	}
 }
 
-// TestProjectedLoadNegativeClamped garante que custo de voo negativo
-// (relógio/recvAt degenerado) nunca produz projected negativo.
+// TestProjectedLoadNegativeClamped guarantees that a negative cost in flight,
+// from a degenerate clock or reception instant, never produces a negative
+// projection.
 func TestProjectedLoadNegativeClamped(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	group, nodeID := "myfn", "n1"
@@ -158,9 +162,11 @@ func TestProjectedLoadNegativeClamped(t *testing.T) {
 	}
 }
 
-// TestSelectBootstrapOrdersByCPU é uma regressão de integração do SHIELD:
-// com learner frio (tudo probation) o RiskSelector devolve a fila por
-// bootstrap (layerRank, k_fn, cpu) — o nó com CPU menor lidera.
+// TestSelectBootstrapOrdersByCPU is an integration regression of the shield:
+// with a cold learner, where every node is in the probation, the risk selector
+// returns the queue by bootstrap, which orders by layer, then by the number of
+// requests in flight and then by processor usage, so the node with the lowest
+// usage leads.
 func TestSelectBootstrapOrdersByCPU(t *testing.T) {
 	now := time.Date(2026, 10, 5, 12, 0, 0, 0, time.UTC)
 	fn := "myfn"

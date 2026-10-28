@@ -1,25 +1,27 @@
 package history
 
-// Harness de replay da fixture (pin do priming 2026-09-21; convertida r4 em 2026-09-28).
+// Replay harness of the pinned fixture.
 //
-// Convenção (base para os todos 2,3,4,15 — manter estável):
-//   - fixture versionada em internal/arbitro/history/testdata/history-r4.json
-//     (testdata Go padrão: ignorado pelo tooling; cópia byte-identical de
-//     ~/priming-2026-09-21-r3/history.json, sha256 839402e1...af1870d).
-//   - carregamento SEMPRE via NewHistory (load path de produção em
-//     history_store.go:53-96) — nenhum schema JSON paralelo; Entry/History
-//     são os tipos de produção.
-//   - janela/now ancorados exatamente na semântica de scanStatsLocked
-//     (history_stats.go:108-116): entry participa sse
-//     !Timestamp.After(now) && now.Sub(Timestamp) <= window.
-//   - default: window=10m (ReplayDefaultWindow), now=max Entry.Timestamp da
-//     fixture (MaxReplayTimestamp); ambos override via params.
+// Convention, which must stay stable:
+//   - the versioned fixture lives in the testdata directory of this package,
+//     which the tooling ignores, and it is a byte identical copy of the
+//     priming history file;
+//   - the loading always goes through the production constructor, which is the
+//     load path of the store, so there is no parallel JSON schema and the entry
+//     and the history are the production types;
+//   - the window and the reference instant follow exactly the semantics of the
+//     scan of the statistics: an entry takes part when its timestamp is not
+//     after the reference instant and the difference is within the window;
+//   - the default window is ten minutes, and the default reference instant is
+//     the largest timestamp of the fixture, and both can be overridden.
 //
-// ACHADO DE PIN (documentado, não bug do helper): o span da fixture é ~54min
-// (21:52→22:46), então window=10m@max vê só a cauda (46 entries), NÃO as 560.
-// O gate de integridade 12/560 é all-time (window<=0). Replay "quente" total
-// exige window >= span (ex.: 60m@max => 560). Implicação p/ seeded-history:
-// seed só aquece o experimento dentro da ThroughputWindow — ver learnings.
+// The span of the fixture is about fifty-four minutes, so a window of ten
+// minutes at the largest timestamp sees only the tail of forty-six entries and
+// not the whole set of five hundred and sixty. The integrity gate of twelve
+// segments against five hundred and sixty entries is therefore computed over the
+// whole history, with a non-positive window. A full warm replay requires a
+// window at least as large as the span. The implication for a seeded history is
+// that the seed only warms the experiment inside the throughput window.
 
 import (
 	"encoding/json"
@@ -30,30 +32,32 @@ import (
 )
 
 const (
-	// ReplayFixtureRelPath é o caminho da fixture relativo a este pacote.
+	// ReplayFixtureRelPath is the path of the fixture relative to this package.
 	ReplayFixtureRelPath = "testdata/history-r4.json"
-	// ReplayDefaultWindow é a janela default do replay (== ThroughputWindow
-	// de produção; NÃO confundir com o default do wiring — aqui é só o
-	// default do harness).
+	// ReplayDefaultWindow is the default window of the replay, which is the
+	// throughput window of the production code, and it must not be confused with
+	// the default of the wiring, since here it is only the default of the harness.
 	ReplayDefaultWindow = 10 * time.Minute
-	// Gate de integridade da fixture de replay (docs/priming-historico-lpr-ocr.md §3).
+	// Integrity gate of the replay fixture.
 	ReplayFixtureSegments = 12
 	ReplayFixtureEntries  = 560
-	// ReplayFixtureCap cobre o maior segmento (108 entries) com folga; igual
-	// ao -history-cap 1000 do priming para não truncar no load.
+	// ReplayFixtureCap covers the largest segment with room to spare, and it
+	// matches the history cap of the priming so the load does not truncate.
 	ReplayFixtureCap = 1000
 )
 
-// LoadReplayFixture carrega path via NewHistory (load path de produção) e
-// registra Close via t.Cleanup. Falha o teste em erro de load.
+// LoadReplayFixture loads the path through the production constructor, which is
+// the production load path, and registers the close with the cleanup of the test.
+// It fails the test on a load error.
 //
-// A fixture pinada e r4 DE NASCENCA (2026-09-28). Antes ela era r3 sem
-// marcador e o harness carimbava a sentinela numa copia em TempDir, porque
-// NewHistory rejeita r3 fail-closed. O r3 foi aposentado: a fixture foi
-// convertida (marker-only: sentinela + entries verbatim) e o passo de
-// migracao saiu do harness. Os gates 12/560, fan-out 280/280 e cauda 10m=46
-// foram reconferidos antes e depois da conversao e NAO se movem -- o
-// gate de calibracao segue em mean_err=0.4063 (NO-GO) / qiso-offline=0.0609.
+// The pinned fixture is of the current format by construction. It used to be an
+// older format without a marker, which the constructor rejects, so the harness
+// stamped the sentinel into a copy in a temporary directory; that format was
+// retired, the fixture was converted with only the sentinel added and the
+// entries kept verbatim, and the migration step left the harness. The gates of
+// twelve segments against five hundred and sixty entries, of the fan-out and of
+// the tail of forty-six entries were checked before and after the conversion and
+// did not move.
 func LoadReplayFixture(t *testing.T, path string) *History {
 	t.Helper()
 	raw, err := os.ReadFile(path)
@@ -88,9 +92,10 @@ func LoadReplayFixture(t *testing.T, path string) *History {
 	return h
 }
 
-// MaxReplayTimestamp devolve o maior Entry.Timestamp do histórico (default
-// `now` do replay). Varre via Keys+StatsFull? Não — Timestamp não sai nas
-// stats; usa o mapa sob RLock (mesmo pacote) sem copiar slices.
+// MaxReplayTimestamp returns the largest timestamp of the entries of the history,
+// which is the default reference instant of the replay. It walks the map under
+// the read lock of the package without copying the slices, since the timestamp
+// does not come out of the statistics.
 func MaxReplayTimestamp(h *History) time.Time {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
@@ -105,12 +110,13 @@ func MaxReplayTimestamp(h *History) time.Time {
 	return max
 }
 
-// CountReplayInWindow ancora window/now e conta entries in-window com a
-// MESMA semântica de scanStatsLocked, mas via API pública de produção
-// (Keys + StatsAndRecent por segmento — sem reimplementar o filtro).
-// Retorna (segmentos com total>0 in-window, soma dos totals in-window).
-// total de StatsAndRecent == todo Outcome in-window (sucesso+falha+timeout;
-// orcamento_excedido excluído — ver scanStatsLocked).
+// CountReplayInWindow anchors the window and the reference instant and counts the
+// entries inside the window with the same semantics of the scan of the
+// statistics, but through the public production API, which is the keys and the
+// statistics per segment, without reimplementing the filter. It returns the
+// number of segments with a positive total inside the window and the sum of
+// those totals, where the total covers every outcome inside the window, the
+// successes, the failures and the timeouts, and excludes the exceeded budget.
 func CountReplayInWindow(h *History, window time.Duration, now time.Time) (segments, total int) {
 	for _, k := range h.Keys() {
 		_, _, _, segTotal, _, _ := h.StatsAndRecent(k, window, now)
@@ -145,7 +151,7 @@ func TestReplayFixturePin(t *testing.T) {
 			t.Fatalf("gate all-time: got %d segmentos/%d entries, want %d/%d",
 				segs, total, ReplayFixtureSegments, ReplayFixtureEntries)
 		}
-		// Integridade por segmento: 280 primárias + 280 agregadas (fan-out).
+		// Integrity per segment: two hundred and eighty primary entries and the same number of aggregated ones.
 		var prim, agg int
 		for _, k := range h.Keys() {
 			_, _, _, segTotal, _, _ := h.StatsAndRecent(k, 0, time.Time{})
@@ -177,8 +183,8 @@ func TestReplayFixturePin(t *testing.T) {
 		h := LoadReplayFixture(t, fixture)
 		now := MaxReplayTimestamp(h)
 		segs, total := CountReplayInWindow(h, ReplayDefaultWindow, now)
-		// Pin do valor real (derivado da fixture, ver cabeçalho): mudou =>
-		// fixture mudou => investigar, não ajustar às cegas.
+		// The pin of the real value, derived from the fixture: a change means that
+		// the fixture changed, so it has to be investigated and not adjusted blindly.
 		if total != 46 {
 			t.Fatalf("10m@max: got total=%d, want 46 (cauda da fixture de replay)", total)
 		}

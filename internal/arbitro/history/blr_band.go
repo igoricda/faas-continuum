@@ -1,5 +1,6 @@
-// BLR Student-t Upper90 band — see blr_model.go for overview.
-// Pure stdlib, no locks/I-O (ADR-0007 D32).
+// Student-t band of the Bayesian linear regression, with the upper bound at
+// ninety percent. See blr_model.go for the overview. It uses only the
+// standard library, without locks or input and output.
 package history
 
 import (

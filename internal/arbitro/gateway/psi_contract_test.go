@@ -1,51 +1,44 @@
-// TDD contract tests for PSI ingestion (selflearning-telemetry-seeded-history,
-// todo 4). TESTS ONLY — no production code is implemented here.
+// Contract tests of the ingestion of pressure data.
 //
-// CONVENTION: TestPSIContract* = FUTURE contract, MUST FAIL until todos 5-8
-// land. TestPSIOldWire* = behavior pins of the CURRENT wire, MUST PASS now
-// and stay green (absent/invalid PSI => 0 = unknown, never error/panic).
+// Convention: the tests named after the contract pin the behavior that the
+// decoders and the history have to keep, and the tests named after the old
+// wire pin the compatibility of a log or a payload without pressure data,
+// which decodes to zero, the unknown value, and never to an error or a panic.
 //
-// FUTURE DECODER CONTRACT (todo 7 implements, same mold as the decoders in
-// gateway_classify.go:370-448):
+// Decoder contract:
 //
-//		func psiOfMetrics(metrics json.RawMessage) (cpuSomeAvg10, memFullAvg10 float64)
+//			func psiOfMetrics(metrics json.RawMessage) (cpuSomeAvg10, memFullAvg10 float64)
 //
-//	  - Input: the execution_metrics blob VERBATIM from the node (the object
-//	    itself, so keys are top-level — same convention as coldInfoOfMetrics).
-//	  - Path: execution_metrics.telemetry.cpu_pressure.avg10 and
-//	    execution_metrics.telemetry.memory_pressure_full.avg10
-//	    (telemetry.Package: CPUPressure/MemoryPressureFull *PressureFields).
-//	  - Gate: avg10 > 0 passes; avg10 <= 0 => 0 (0 = unknown, fail-open).
-//	  - Tolerant: nil blob, invalid JSON, missing block, wrong-typed block or
-//	    wrong-typed avg10 => (0, 0), NEVER error/panic (mirrors
-//	    resourceProfileOfMetrics: sample_count<=0 => zeros).
-//	  - recordAttempt calls it ONCE next to capacityOfMetrics/coldInfoOfMetrics
-//	    and stamps history.Entry.PSICpuSomeAvg10/PSIMemFullAvg10.
+//	  - Input: the blob of execution metrics verbatim from the node, as the
+//	    object itself, so the keys are top level, the same convention as the
+//	    cold information decoder.
+//	  - Path: the average of ten seconds of the processor pressure and of the
+//	    full memory pressure under the telemetry block.
+//	  - Gate: a positive average passes, and a non-positive one becomes zero,
+//	    which is unknown, with a fail-open.
+//	  - Tolerant: a nil blob, invalid JSON, a missing block, a wrong type or a
+//	    non-numeric value give zero and zero, and never an error or a panic,
+//	    which mirrors the decoder of the resource profile.
+//	  - The recording of an attempt calls it once, next to the capacity and the
+//	    cold information decoders, and stamps the pressure fields of the entry.
 //
-// ENTRY FIELDS (todo 5, additive omitempty — old files keep decoding):
+// Entry fields: the two pressure averages are additive and omitted when zero,
+// so older files keep decoding.
 //
-//	PSICpuSomeAvg10 float64 `json:"psi_cpu_some_avg10,omitempty"`
-//	PSIMemFullAvg10 float64 `json:"psi_mem_full_avg10,omitempty"`
+// Live reference: it gains the two values, which are populated in the same
+// single take of the note call, and the late entry inherits them.
 //
-// LIVEREF (todo 8): liveRef gains psiCpuSomeAvg10/psiMemFullAvg10 float64;
-// recordAttempt populates them in the SAME g.liveIdx.note call (single-take
-// discipline preserved: recordLateAttempt keeps its SINGLE take in
-// gateway_late.go:319-322); the hasRef block (gateway_late.go:340-353)
-// copies them onto the late Entry.
+// Late report: it gains the same two optional fields, so a node that measured
+// the pressure per invocation can report it, and an absent value is zero.
 //
-// LATEREPORT (todo 8): LateReport gains the same two fields omitempty so a
-// node that measured PSI per-invocation can report it; absent => 0.
+// Supersede: the late path supersedes both the primary key and the aggregated
+// segment of the layer, and the surviving late entry carries the inherited
+// pressure values.
 //
-// SUPERSEDE (already dual-key, gateway_late.go:360-369): the late path
-// supersedes BOTH the primary and the AggLayerKey segment; the PSI contract
-// only adds that the surviving late Entry carries the inherited PSI values.
-//
-// MIGRATOR (todo 6): dry-run over the pinned r3 fixture
-// (internal/arbitro/history/testdata/history-r3.json: 12 keys / 560
-// entries / 0 PSI keys) reports would=560, migrated=0. The gateway test
-// loads the JSON DIRECTLY (os.ReadFile) because the replay helpers live in
-// history _test files, which are NOT importable; the migrator itself must
-// live where it can reuse the history package internals.
+// Migrator: a dry run over the pinned fixture of the previous format reports
+// every entry as migratable and none as migrated, since the old format has no
+// pressure keys. The test loads the JSON directly, since the replay helpers
+// live in test files of the history package and are not importable.
 package gateway
 
 import (
@@ -76,15 +69,14 @@ func loadMetricsFixture(t *testing.T, name string) json.RawMessage {
 }
 
 // ---------------------------------------------------------------------------
-// CONTRACT (a): full-PSI piggyback decodes to the stamped values.
-// FAILS now: stub returns zeros + history.Entry has no PSI fields.
+// Contract: a complete piggyback decodes to the stamped values.
 // ---------------------------------------------------------------------------
 
 func TestPSIContract_DecodeFullPSI(t *testing.T) {
 	raw := loadMetricsFixture(t, "execution_metrics_with_psi.json")
 
-	// The fixture REALLY carries the piggyback (guard against a bad fixture
-	// masking as a contract failure).
+	// The fixture really carries the piggyback, which guards against a bad
+	// fixture that would mask a contract failure.
 	var probe struct {
 		Telemetry *struct {
 			CPU *struct {
@@ -105,7 +97,7 @@ func TestPSIContract_DecodeFullPSI(t *testing.T) {
 		t.Fatalf("fixture sem memory_pressure_full.avg10=8.25 (got %+v)", probe.Telemetry)
 	}
 
-	// Wired to psiOfMetrics (todo 7).
+	// Wired to the pressure decoder.
 	cpu, mem := psiOfMetrics(raw)
 	if cpu != 12.5 {
 		t.Errorf("psi cpu_some_avg10 = %v, want 12.5 (gate avg10>0)", cpu)
@@ -117,9 +109,9 @@ func TestPSIContract_DecodeFullPSI(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CONTRACT (a2): decode gate avg10>0 — zero/negative collapse to unknown.
-// FAILS now for the same reason (stub + missing Entry fields); the zero and
-// negative rows already assert the fail-open half of the gate.
+// Contract: the decode gate requires a positive average, and a zero or a
+// negative value collapses to unknown. The zero and negative rows also assert
+// the fail-open half of the gate.
 // ---------------------------------------------------------------------------
 
 func TestPSIContract_DecodeGate(t *testing.T) {
@@ -135,7 +127,7 @@ func TestPSIContract_DecodeGate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			// Wired to psiOfMetrics (todo 7).
+			// Wired to the pressure decoder.
 			cpu, mem := psiOfMetrics(json.RawMessage(tc.blob))
 			if cpu != tc.want[0] || mem != tc.want[1] {
 				t.Errorf("psi decode = (%v,%v), want (%v,%v)", cpu, mem, tc.want[0], tc.want[1])
@@ -146,9 +138,8 @@ func TestPSIContract_DecodeGate(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CONTRACT (b/c): absent/invalid telemetry => zeros, never error/panic.
-// FAILS now (missing Entry fields); the decoder-half rows pass today and
-// are ALSO pinned as old-wire behavior in TestPSIOldWire_* below.
+// Contract: absent or invalid telemetry gives zeros, and never an error or a
+// panic. The rows of the decoder also pin the old-wire behavior below.
 // ---------------------------------------------------------------------------
 
 func TestPSIContract_DecodeAbsentInvalidIsUnknown(t *testing.T) {
@@ -158,8 +149,8 @@ func TestPSIContract_DecodeAbsentInvalidIsUnknown(t *testing.T) {
 		"execution_metrics_invalid.json",
 	} {
 		raw := loadMetricsFixture(t, name)
-		// Wired to psiOfMetrics (todo 7). Must not panic
-		// on any of these blobs, even the truncated-JSON one.
+		// Wired to the pressure decoder, which must not panic on any of these
+		// blobs, including the truncated JSON.
 		cpu, mem := psiOfMetrics(raw)
 		_ = cpu
 		_ = mem
@@ -171,59 +162,30 @@ func TestPSIContract_DecodeAbsentInvalidIsUnknown(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// CONTRACT: Entry carries the new omitempty fields.
-// FAILS now (fields do not exist).
+// Contract: the entry carries the new optional fields.
 // ---------------------------------------------------------------------------
 
-// (TestPSIContract_EntryFields removido: a segunda metade — zero Entry sem
-// as chaves PSI no JSON — é literalmente a de
-// history/entry_r4_test.go:79 ("zero-Value Entry marshaliza SEM as chaves
-// PSI (r3 byte-clean)"), inclusive a mensagem de erro. A primeira metade
-// era reflection das tags de history.Entry, cujo owner é o próprio package
-// history: entry_r4_test.go:21-70 faz round-trip de Save+NewHistory com
-// 12.5/8.25, o que prova existência, tipo e serialização.)
-
 // ---------------------------------------------------------------------------
-// CONTRACT: liveRef + LateReport carry PSI; late inherits via single take.
-// FAILS now (fields do not exist). The dual-key supersede half already
-// works today and is exercised below so todos 5-8 cannot regress it.
+// Contract: the live reference and the late report carry the pressure values,
+// and the late entry inherits them through the single take. The dual-key
+// supersede is exercised below, so that the inheritance cannot regress it.
 // ---------------------------------------------------------------------------
 
-// (O antigo TestPSIContract_LiveRefAndLateReportFields — só reflection de
-// nomes/tipos dos 4 campos PSI — e o TestPSIContract_LateInheritsPSIViaSingleTake
-// foram removidos: ambos repetiam, mais fraco, o que TestLatePSI já prova
-// POR VALOR no boundary real (herança liveRef 12.5/8.25, órfão body 7.5/3.25,
-// via monitor 9.5/4.5, unknown 0/0, e fio antigo sem as chaves). A forma
-// dos campos e o omitempty são consequência do round-trip; o comportamento
-// é o contrato.)
-
-// (TestPSIContract_LateInheritsPSIViaSingleTake removido: mesmo cenário e
-// mesmo fixture de TestLatePSI/"correlated inherits PSI via single take",
-// que assere o sinal que aqui faltava — late.PSICpuSomeAvg10 == 12.5 —
-// enquanto este terminava em duas chamadas de reflection e passaria mesmo
-// se recordLate deixasse de herdar o PSI do liveRef.)
-
 // ---------------------------------------------------------------------------
-// CONTRACT (e): migrator r3->r4 dry-run — would=560, migrated=0.
-// FAILS now: stub returns (0,0). The fixture facts (560 entries, 0 PSI
-// keys) are asserted for real — they are the dry-run INPUT todo 6 consumes.
+// Contract: the dry run of the migration from the previous format to the
+// current one reports every entry as migratable and none as migrated. The
+// facts of the fixture are asserted for real, since they are the input of the
+// dry run.
 // ---------------------------------------------------------------------------
-
-// (TestPSIContract_MigratorDryRun removido: reachava ../history/testdata
-// para contar 12 segmentos / 560 entries / 0 chaves PSI — metadados da
-// fixture, não comportamento — e chamava history.DryRunMigrateR3R4, que o
-// próprio package history prova contra a MESMA fixture, em
-// migrate_r3_r4_test.go, com MigrateR3R4File real + byte-compare de que o
-// dry-run não reescreve + ausência de .r3.bak. A migração é coberta no
-// owner.)
 
 // ===========================================================================
-// OLD-WIRE BEHAVIOR PINS — MUST PASS NOW and stay green through todos 5-8.
-// Absent/invalid PSI => 0 = unknown; old wire intact; no error/panic.
+// Pins of the old wire, which have to stay green: absent or invalid pressure
+// data gives zero, which is unknown, the old wire stays intact, and there is
+// no error or panic.
 // ===========================================================================
 
 // Absent PSI block: every CURRENT decoder returns its zero value and the
-// piggyback still decodes everywhere else (cold, profile, phases, capacity).
+// piggyback still decodes everywhere else (cold, profile, stages, capacity).
 func TestPSIOldWire_AbsentIsUnknown(t *testing.T) {
 	plain := loadMetricsFixture(t, "execution_metrics_no_telemetry.json")
 	full := loadMetricsFixture(t, "execution_metrics_with_psi.json")
@@ -241,9 +203,9 @@ func TestPSIOldWire_AbsentIsUnknown(t *testing.T) {
 		t.Errorf("phases plain = (%v,%v,%v), want (3,5,42)", a, r, f)
 	}
 
-	// The PSI-bearing blob MUST still decode on the old wire (PSI keys
-	// ignored, everything else intact) — this is the "não quebrar fio
-	// antigo" guard todos 5-8 must keep green.
+	// The blob with pressure data must still decode on the old wire, with the
+	// pressure keys ignored and everything else intact, which is the guard
+	// against breaking an older log.
 	if caps := capacityOfMetrics(full); len(caps) != 1 {
 		t.Errorf("PSI blob: capacity len=%d, want 1", len(caps))
 	}
@@ -252,9 +214,9 @@ func TestPSIOldWire_AbsentIsUnknown(t *testing.T) {
 	}
 }
 
-// Wrong-typed telemetry block and truncated JSON: zeros, never error/panic.
-// (The decoders return values only, so "never error" = correct zeros + no
-// panic; exercised under -race in CI.)
+// A wrong-typed telemetry block and a truncated JSON give zeros, and never an
+// error or a panic. The decoders return values only, so the assertion is
+// correct zeros and no panic, which runs under the race detector.
 func TestPSIOldWire_InvalidNeverFails(t *testing.T) {
 	bad := loadMetricsFixture(t, "execution_metrics_bad_telemetry.json")
 	if caps := capacityOfMetrics(bad); caps != nil {
@@ -286,9 +248,9 @@ func TestPSIOldWire_InvalidNeverFails(t *testing.T) {
 	}
 }
 
-// Late orphan (no liveRef, empty monitor): falls back to unknown via
-// mon.Latest miss, applies cleanly, never panics. Pins the fallback half
-// of contract (d); the PSI half is TestPSIContract_LateInheritsPSIViaSingleTake.
+// A late orphan, without a live reference and with an empty monitor, falls
+// back to unknown through the latest reading, applies cleanly and never
+// panics, which pins the fallback half of the contract.
 func TestPSIOldWire_LateOrphanFallback(t *testing.T) {
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
@@ -319,18 +281,15 @@ func TestPSIOldWire_LateOrphanFallback(t *testing.T) {
 	}
 }
 
-// Single-take discipline + 5m TTL / 10k bound shape: take consome a
-// correlação e recordAttempt sem requestID/attemptN não indexa nada. Pins
-// a disciplina de liveRef que o todo 8 precisa preservar.
+// Single-take discipline and the shape of the time to live and of the bound:
+// the take consumes the correlation, and the recording of an attempt without a
+// request identifier or without a positive attempt number indexes nothing.
 func TestPSIOldWire_SingleTakeDiscipline(t *testing.T) {
-	// A disciplina take-consome em si é provada no boundary real por
-	// TestLatePSI/"correlated inherits PSI via single take"
-	// (gateway_late_test.go:347) e TestObservedContract_LateInheritsViaSingleTake.
-	// Aqui resta o caso que nenhum deles alcança: recordAttempt sem
-	// correlação não pode indexar liveRef.
-	//
-	// recordAttempt sem correlação (requestID vazio / attemptN<=0) não
-	// indexa: o late seguinte é órfão (fallback), nunca supersede fantasma.
+	// The discipline of the take itself is proven at the real boundary by the
+	// late test, and what remains here is the case that no other test reaches:
+	// the recording of an attempt without a correlation cannot index the live
+	// reference. The next late report is then an orphan, which falls back, and
+	// never a phantom supersede.
 	hist, err := history.NewHistory("", 100)
 	if err != nil {
 		t.Fatal(err)

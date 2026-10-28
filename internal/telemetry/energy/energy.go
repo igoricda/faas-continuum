@@ -198,15 +198,15 @@ func detectRAPLPackages(powercapRoot string) []string {
 			continue // subzona intel-rapl:X:Y — subset do pacote X
 		}
 		if _, err := strconv.Atoi(suffix); err != nil {
-			continue // sufixo não numérico — não é zona de pacote
+			continue // a non-numeric suffix is not a power zone
 		}
 		path := filepath.Join(powercapRoot, name, "energy_uj")
 		content, err := os.ReadFile(path)
 		if err != nil {
-			continue // EPERM (root-only) ou ausente: pacote não qualifica
+			continue // permission denied or absent: the package does not qualify
 		}
 		if _, err := strconv.ParseUint(strings.TrimSpace(string(content)), 10, 64); err != nil {
-			continue // conteúdo corrupto: pacote não qualifica
+			continue // corrupted content: the package does not qualify
 		}
 		paths = append(paths, path)
 	}

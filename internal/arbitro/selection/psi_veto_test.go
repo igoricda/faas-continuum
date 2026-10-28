@@ -1,16 +1,14 @@
 package selection
 
-// TDD (todo 3, teste-antes-do-código): veto full PSI preservado +
-// fail-open. Estes testes foram escritos ANTES de psi_veto.go existir
-// (a primeira execução falha em compilação: undefined:
-// PSIVetoFull/PSIVetoThresholds — ver evidence log) e só passam depois
-// da implementação.
+// Tests of the veto by full pressure: the veto is preserved and the behavior is
+// fail-open. The tests were written before the implementation existed, and they
+// only pass after it.
 //
-// Convenções reusadas dos testes vizinhos (selection_test.go:
-// psiPtr/scBucket/defaultLimits): nada reimplementado — VetoByRate e o
-// revival são exercitados pelos caminhos EXISTENTES (history.VetoByRate,
-// que segue consumido pelo teto de fila aprendido em queuecap.go, e o
-// fail-open do veto PSI no RiskSelector, em psi_veto_wiring_test.go).
+// The conventions of the neighboring tests are reused, so nothing is
+// reimplemented: the veto by rate and the revival are exercised through the
+// existing paths, which are the veto by rate of the history, still consumed by
+// the learned queue ceiling, and the fail-open of the pressure veto in the risk
+// selector.
 
 import (
 	"math"
@@ -21,9 +19,9 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// TestPSIVetoFull_MemFullAboveThresholdVetoes é o caso (a) do enunciado:
-// mem_full_avg10=20 estoura o default T_full (10-15) => veta, mesmo com
-// cpu_some baixo.
+// TestPSIVetoFull_MemFullAboveThresholdVetoes is the first case: a full memory
+// pressure of twenty exceeds the default threshold, so the node is vetoed even
+// with a low processor pressure.
 func TestPSIVetoFull_MemFullAboveThresholdVetoes(t *testing.T) {
 	th := DefaultPSIVetoThresholds()
 	if !PSIVetoFull(5.0, 20.0, true, th) {
@@ -31,9 +29,9 @@ func TestPSIVetoFull_MemFullAboveThresholdVetoes(t *testing.T) {
 	}
 }
 
-// TestPSIVetoFull_CPUSomeAboveThresholdVetoes cobre o outro braço do OR:
-// cpu_some alto veta mesmo com mem_full baixo; e o limite é estrito
-// (> — igual a Overloaded/filterProjectedOverloaded).
+// TestPSIVetoFull_CPUSomeAboveThresholdVetoes covers the other arm of the
+// disjunction: a high processor pressure vetoes even with a low memory
+// pressure, and the comparison is strict, as in the overloaded filter.
 func TestPSIVetoFull_CPUSomeAboveThresholdVetoes(t *testing.T) {
 	th := DefaultPSIVetoThresholds()
 	if !PSIVetoFull(35.0, 2.0, true, th) {
@@ -47,8 +45,9 @@ func TestPSIVetoFull_CPUSomeAboveThresholdVetoes(t *testing.T) {
 	}
 }
 
-// TestPSIVetoFull_FailOpenOnUnknown é o caso (b): PSI nil/stale/unknown
-// NUNCA veta sozinho — fail-open (convenção `0`=unknown do todo 1).
+// TestPSIVetoFull_FailOpenOnUnknown is the second case: a nil, stale or
+// unknown pressure never vetoes alone, which is the fail-open convention where
+// zero means unknown.
 func TestPSIVetoFull_FailOpenOnUnknown(t *testing.T) {
 	th := DefaultPSIVetoThresholds()
 	cases := map[string]struct {
@@ -70,9 +69,9 @@ func TestPSIVetoFull_FailOpenOnUnknown(t *testing.T) {
 	}
 }
 
-// TestPSIVetoFull_FromPackage exercita o adaptador de telemetria real:
-// ponteiros nil => sem PSI => fail-open; ok=false => fail-open;
-// mem_full=20 => veta.
+// TestPSIVetoFull_FromPackage exercises the adapter over the real telemetry: a
+// nil reading or an unavailable one is fail-open, while a full memory pressure
+// of twenty vetoes.
 func TestPSIVetoFull_FromPackage(t *testing.T) {
 	th := DefaultPSIVetoThresholds()
 	clean := telemetry.Package{NodeID: "n1", CPUUsagePct: 10, MemoryUsagePct: 10}
@@ -101,9 +100,10 @@ func TestPSIVetoFull_FromPackage(t *testing.T) {
 	}
 }
 
-// TestPSIVetoThresholds_DefaultsInRange fixa os defaults escolhidos
-// (T_cpu em 25-30, T_full em 10-15): pin contra deriva acidental — a
-// calibração real é do todo 16 (flags).
+// TestPSIVetoThresholds_DefaultsInRange pins the chosen defaults, with the
+// processor threshold between twenty-five and thirty and the memory threshold
+// between ten and fifteen, against an accidental drift, since the real
+// calibration belongs to the flags.
 func TestPSIVetoThresholds_DefaultsInRange(t *testing.T) {
 	th := DefaultPSIVetoThresholds()
 	if th.CPUSomeAvg10 < 25 || th.CPUSomeAvg10 > 30 {
@@ -117,9 +117,8 @@ func TestPSIVetoThresholds_DefaultsInRange(t *testing.T) {
 	}
 }
 
-// TestPSIVetoThresholds_ValidateRejectsNonPositive é o failure case do
-// enunciado: threshold zero/negativo => erro fail-fast, nunca defaults
-// silenciosos.
+// TestPSIVetoThresholds_ValidateRejectsNonPositive is the failure case: a zero
+// or negative threshold is a fail-fast error and never a silent default.
 func TestPSIVetoThresholds_ValidateRejectsNonPositive(t *testing.T) {
 	bad := []PSIVetoThresholds{
 		{CPUSomeAvg10: 0, MemFullAvg10: 12},
@@ -135,8 +134,9 @@ func TestPSIVetoThresholds_ValidateRejectsNonPositive(t *testing.T) {
 	}
 }
 
-// seedFailuresOnly grava nFail falhas (sem sucessos) no bucket indicado —
-// o cenário exato do caso (c): 5 falhas + 0 sucessos.
+// seedFailuresOnly records failures without successes in the given bucket,
+// which is the exact scenario of the third case, with five failures and no
+// success.
 func seedFailuresOnly(t *testing.T, h *history.History, fn, nodeID string, sc history.ScenarioContext, now time.Time, nFail int) {
 	t.Helper()
 	for i := 0; i < nFail; i++ {
@@ -153,24 +153,23 @@ func seedFailuresOnly(t *testing.T, h *history.History, fn, nodeID string, sc hi
 	}
 }
 
-// TestPSIVeto_VetoByRatePreserved é o caso (c): o predicado VetoByRate do
-// histórico (compartilhado — o teto de fila aprendido maxQueueKForNode
-// ainda o consome, queuecap.go) veta com 5 falhas + 0 sucessos e o piso
-// <5 nunca veta. O veto exato por segmento era exclusivo do v1
-// (SelfLearningSelector) e foi aposentado com ele no ADR-0012; o
-// predicado do histórico segue pinado aqui.
+// TestPSIVeto_VetoByRatePreserved is the third case: the predicate of the
+// history, which is shared and still consumed by the learned queue ceiling,
+// vetoes with five failures and no success, while the floor below five never
+// vetoes. The exact veto per segment belonged to the previous selector and was
+// retired with it, so the predicate of the history stays pinned here.
 func TestPSIVeto_VetoByRatePreserved(t *testing.T) {
 	rate := history.LaplaceRate(0, 5)
 	if !history.VetoByRate(5, rate) {
 		t.Fatalf("VetoByRate(5, LaplaceRate(0,5)=%.4f) deveria vetar", rate)
 	}
-	// Piso intacto: total<5 nunca veta, mesmo com 100% de falha.
+	// The floor is intact: a total below five never vetoes, even with a hundred percent of failures.
 	if history.VetoByRate(4, history.LaplaceRate(0, 4)) {
 		t.Fatalf("VetoByRate com total=4 não deveria vetar (piso>=5)")
 	}
 
-	// A evidência que alimentaria o veto exato continua gravável: 5
-	// falhas no bucket produzem uma taxa vetável no histórico.
+	// The evidence that would feed the exact veto stays recordable, since five
+	// failures in the bucket produce a vetoable rate in the history.
 	now := time.Date(2026, 9, 23, 12, 0, 0, 0, time.UTC)
 	h, _ := history.NewHistory("", 500)
 	seedFailuresOnly(t, h, "myfn", "n1", scBucket(history.Bucket50_75), now, 5)

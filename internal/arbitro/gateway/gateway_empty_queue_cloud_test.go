@@ -18,13 +18,13 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// Regressão do todo 3 (selflearning-consistency-fixes, C1/D16): fila vazia
-// (nenhum candidato: sem nó ativo/hospedeiro, todos sobrecarregados/projetados,
-// inaptos ou filtrados por marca) DEVE alcançar o fallback de nuvem quando ele
-// está configurado. Sem nuvem, o desfecho 503 NO_NODE_AVAILABLE permanece
-// byte-idêntico ao caminho legado (inclusive recordNoNode).
+// Regression of the empty queue: no candidate, either from the absence of an
+// active or hosting node, from every node being overloaded or projected above
+// the ceiling, unviable or filtered by a mark, has to reach the cloud fallback
+// when it is configured. Without a cloud, the answer of no node available stays
+// byte identical to the legacy path, including the recording of the absence.
 
-// newEmptyQueueInvLog abre um invocation log isolado e devolve o logger + path.
+// newEmptyQueueInvLog opens an isolated invocation log and returns the logger and its path.
 func newEmptyQueueInvLog(t *testing.T) (*InvocationLog, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "invocations.jsonl")
@@ -35,7 +35,7 @@ func newEmptyQueueInvLog(t *testing.T) (*InvocationLog, string) {
 	return l, path
 }
 
-// readEmptyQueueInvRecords fecha o log e devolve as linhas decodificadas.
+// readEmptyQueueInvRecords closes the log and returns the decoded lines.
 func readEmptyQueueInvRecords(t *testing.T, l *InvocationLog, path string) []InvocationRecord {
 	t.Helper()
 	if err := l.Close(); err != nil {
@@ -73,8 +73,9 @@ type emptyQueueCloudResp struct {
 	} `json:"execution_metrics"`
 }
 
-// (a) fila vazia + nuvem configurada + Forward 2xx => 200 cloud_fallback:true,
-// e recordNoNode NUNCA é chamado quando a nuvem serviu a resposta.
+// An empty queue with a configured cloud and a successful forwarding gives a
+// success marked as a cloud fallback, and the absence of a node is never
+// recorded when the cloud served the answer.
 func TestGateway_EmptyQueueCloudFallback(t *testing.T) {
 	cloudSrv := newCloudOKServer(t)
 
@@ -111,9 +112,10 @@ func TestGateway_EmptyQueueCloudFallback(t *testing.T) {
 	}
 }
 
-// (b) fila vazia + SEM nuvem => 503 byte-idêntico (status+body+retryable) e
-// recordNoNode como antes. Fixture pinada: mudanças futuras não podem alterar
-// silenciosamente o envelope do caminho legado.
+// An empty queue without a cloud gives the same answer as before, with the
+// status, the body and the retryable flag pinned, and the absence of a node is
+// recorded as before, so a future change cannot silently alter the envelope of
+// the legacy path.
 func TestGateway_EmptyQueueNoCloud503ByteIdentical(t *testing.T) {
 	ns, _ := nodes.NewNodeStore("")
 	gw := newTestGateway(ns)
@@ -145,8 +147,8 @@ func TestGateway_EmptyQueueNoCloud503ByteIdentical(t *testing.T) {
 	}
 }
 
-// (c) todos os candidatos excluídos por sobrecarga (projetada/observada) +
-// nuvem => nuvem; os nós sobrecarregados NÃO são tocados.
+// Every candidate excluded by overload, projected or observed, with a cloud
+// configured, reaches the cloud, and the overloaded nodes are never touched.
 func TestGateway_AllOverloadedCloudFallback(t *testing.T) {
 	var nodeHits int32
 	nodeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -162,9 +164,10 @@ func TestGateway_AllOverloadedCloudFallback(t *testing.T) {
 		t.Fatalf("upsert: %v", err)
 	}
 	mon := monitor.NewMonitor()
-	// CPU 95 > max_cpu_pct 85: excluído tanto por FilterOverloaded quanto
-	// pelo hard guard PROJETADO (projected = 95 + 0 + 0 > 85) do
-	// RiskSelector — candidato esvazia e a fila chega vazia.
+	// A processor usage of ninety-five is above the ceiling of eighty-five, so
+	// the node is excluded both by the overload filter and by the hard guard of
+	// the projected load, of ninety-five against eighty-five, and the queue
+	// reaches the cloud empty.
 	mon.Update(newPkg("over", 95))
 
 	now := time.Now()
@@ -214,8 +217,9 @@ func TestGateway_AllOverloadedCloudFallback(t *testing.T) {
 	}
 }
 
-// (d) fila vazia + nuvem configurada mas falhando => 502 CLOUD_FALLBACK_FAILED
-// preservando retryable=true (herdado da causa raiz NO_NODE_AVAILABLE).
+// An empty queue with a configured cloud that fails gives a bad gateway marked
+// as a failed cloud fallback, and the retryable flag is preserved from the root
+// cause, which is the absence of a node.
 func TestGateway_EmptyQueueCloudFailure(t *testing.T) {
 	cloudSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -252,9 +256,9 @@ func TestGateway_EmptyQueueCloudFailure(t *testing.T) {
 	}
 }
 
-// (e) SLO minúsculo: orçamento expira ANTES da chamada de nuvem
-// (remaining<=0) => o 503 NO_NODE_AVAILABLE é escrito, a nuvem NÃO é chamada
-// e recordNoNode NÃO é executado (o caminho de nuvem respondeu).
+// A tiny objective makes the budget expire before the call to the cloud, so
+// the answer of no node available is written, the cloud is not called and the
+// absence of a node is not recorded, since the path of the cloud answered.
 func TestGateway_EmptyQueueCloudBudgetExpired(t *testing.T) {
 	var cloudCalls int32
 	cloudSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -276,8 +280,9 @@ func TestGateway_EmptyQueueCloudBudgetExpired(t *testing.T) {
 	gw.SetInvocationLog(il)
 
 	req := httptest.NewRequest(http.MethodPost, "/invoke", strings.NewReader(`{"function":"fn","slo":{"max_latency_ms":1},"input":{"a":1}}`))
-	// Deadline do pai já vencido garante remaining<=0 de forma determinística
-	// (o overall continua sendo o SLO minúsculo de 1ms).
+	// A deadline of the parent that already expired guarantees a non-positive
+	// remaining budget deterministically, while the overall objective stays at
+	// one millisecond.
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Millisecond))
 	defer cancel()
 	req = req.WithContext(expired)

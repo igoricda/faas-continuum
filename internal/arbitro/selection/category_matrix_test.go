@@ -1,17 +1,17 @@
-// Matrix de compatibilidade, wildcard e discordância de categorias
-// (function-category-routing, todo 10). Este arquivo é a matriz ÚNICA que
-// cobre os seis casos do plano:
+// Matrix of compatibility, wildcard and disagreement of categories. This file
+// is the single matrix that covers the six cases of the routing of categories:
 //
-//	(a) nil map em todo lugar  => comportamento exato (byte-idêntico ao antigo)
-//	(b) Functions vazia (wildcard) => elegível para categorias
-//	(c) mesma categoria, variantes cruzadas => match
-//	(d) categoria cruzada => rejeição
-//	(e) dois nós discordam na grafia da categoria => outcome node-relative
-//	(f) valor de categoria vazio => nunca casa
+//	(a) a nil map everywhere gives the exact previous behavior, byte identical
+//	(b) an empty function list, which is a wildcard, is eligible for categories
+//	(c) the same category with crossed variants matches
+//	(d) a crossed category is rejected
+//	(e) two nodes disagree on the spelling of the category, which gives a
+//	    node-relative outcome
+//	(f) an empty category value never matches
 //
-// Sem enfraquecer nenhum teste existente — apenas adiciona. Os casos
-// (a)-(f) são exercitados aqui contra AMBOS os seletores via
-// assertBothSelectors, e (e)/(f) adicionalmente contra os helpers puros.
+// It weakens no existing test and only adds coverage. The cases (a) to (f) are
+// exercised against both selectors through a shared assertion, and the cases
+// (e) and (f) additionally against the pure helpers.
 package selection
 
 import (
@@ -56,28 +56,29 @@ func matrixNodes() (tiny, full, whisper, wildcard, nilMap, emptyVal nodes.Node) 
 		Layer:     nodes.LayerBorda,
 		Functions: []string{"alpr-yolo-tiny"},
 		FunctionCategories: map[string]string{
-			"alpr-yolo-tiny": "", // valor vazio: nunca casa
+			"alpr-yolo-tiny": "", // an empty value never matches
 		},
 	}
 	return tiny, full, whisper, wildcard, nilMap, emptyVal
 }
 
-// (a) nil map em todo lugar => byte-idêntico ao filtro de hospedagem antigo:
-// só o concreto exatamente hospedado é elegível; categoria nomeada vira
-// string desconhecida (sem mapeamento => verbatim => exact-only).
+// (a) A nil map everywhere is byte identical to the previous hosting filter:
+// only the exactly hosted concrete variant is eligible, and a named category
+// becomes an unknown string, which without a mapping is matched verbatim and
+// therefore exactly.
 func TestCategoryMatrix_NilMapExactOnly(t *testing.T) {
 	_, _, _, _, nilMap, _ := matrixNodes()
 	candidates := []nodes.Node{nilMap}
-	// Concreto exato hospedado => elegível.
+	// The exactly hosted concrete variant is eligible.
 	assertBothSelectors(t, "a-exact", candidates, "alpr-yolo-tiny", map[string]bool{"m-nilmap": true})
-	// Categoria nomeada sem mapeamento => não é concreto => nada elegível.
+	// A named category without a mapping is not a concrete variant, so nothing is eligible.
 	assertBothSelectors(t, "a-category-name", candidates, "alpr-yolo", map[string]bool{})
-	// Outra variante da "mesma família" (não mapeada) => nada.
+	// Another variant of the same family, without a mapping, matches nothing.
 	assertBothSelectors(t, "a-sibling", candidates, "alpr-yolo-full", map[string]bool{})
 }
 
-// (b) Functions vazia/nil (wildcard) => elegível para tudo, inclusive
-// categorias.
+// (b) An empty or nil function list, which is a wildcard, is eligible for
+// everything, including categories.
 func TestCategoryMatrix_WildcardEligibleForCategories(t *testing.T) {
 	_, full, _, wildcard, _, _ := matrixNodes()
 	for _, w := range []nodes.Node{
@@ -90,7 +91,7 @@ func TestCategoryMatrix_WildcardEligibleForCategories(t *testing.T) {
 	}
 }
 
-// (c) mesma categoria, variantes cruzadas => match em ambas as direções.
+// (c) The same category with crossed variants matches in both directions.
 func TestCategoryMatrix_CrossVariantSameCategory(t *testing.T) {
 	tiny, full, _, _, _, _ := matrixNodes()
 	candidates := []nodes.Node{tiny, full}
@@ -99,8 +100,8 @@ func TestCategoryMatrix_CrossVariantSameCategory(t *testing.T) {
 	assertBothSelectors(t, "c-category-request", candidates, "alpr-yolo", map[string]bool{"m-tiny": true, "m-full": true})
 }
 
-// (d) categoria cruzada => rejeição: nó whisper nunca serve alpr-yolo e
-// vice-versa.
+// (d) A crossed category is rejected, so the node that hosts one variant never
+// serves the other.
 func TestCategoryMatrix_CrossCategoryRejection(t *testing.T) {
 	tiny, full, whisper, _, _, _ := matrixNodes()
 	candidates := []nodes.Node{tiny, full, whisper}
@@ -108,9 +109,10 @@ func TestCategoryMatrix_CrossCategoryRejection(t *testing.T) {
 	assertBothSelectors(t, "d-whisper", candidates, "whisper", map[string]bool{"m-whisper": true})
 }
 
-// (e) dois nós discordam na grafia => outcome node-relative (split-brain
-// documentado). Cada nó resolve a própria categoria; a regra canônica de
-// grupo escolhe deterministicamente o primeiro hit em ordem de NodeID.
+// (e) Two nodes disagree on the spelling of the category, which gives a
+// node-relative outcome: each node resolves its own category, and the canonical
+// rule of the group deterministically chooses the first hit in the order of the
+// node identifier.
 func TestCategoryMatrix_SpellingDisagreementNodeRelative(t *testing.T) {
 	a := nodes.Node{
 		NodeID:             "disc-a",
@@ -124,30 +126,30 @@ func TestCategoryMatrix_SpellingDisagreementNodeRelative(t *testing.T) {
 		Functions:          []string{"alpr-yolo-tiny"},
 		FunctionCategories: map[string]string{"alpr-yolo-tiny": "alpr-yolo-legacy"},
 	}
-	// Helper puro: cada nó devolve a própria categoria.
+	// The pure helper: each node returns its own category.
 	if got := EffectiveGroup("alpr-yolo-tiny", a); got != "alpr-yolo" {
 		t.Fatalf("EffectiveGroup(a) = %q, want alpr-yolo", got)
 	}
 	if got := EffectiveGroup("alpr-yolo-tiny", b); got != "alpr-yolo-legacy" {
 		t.Fatalf("EffectiveGroup(b) = %q, want alpr-yolo-legacy", got)
 	}
-	// Regra canônica: primeiro hit em ordem de NodeID ("disc-a" < "disc-b").
+	// The canonical rule: the first hit in the order of the node identifier.
 	if got := ResolveRequestGroup("alpr-yolo-tiny", []nodes.Node{b, a}); got != "alpr-yolo" {
 		t.Fatalf("ResolveRequestGroup = %q, want alpr-yolo (sorted-NodeID first)", got)
 	}
 }
 
-// (f) valor de categoria vazio => nunca casa, em todos os níveis.
+// (f) An empty category value never matches, at any level.
 func TestCategoryMatrix_EmptyValueNeverMatches(t *testing.T) {
 	_, _, _, _, _, emptyVal := matrixNodes()
 	candidates := []nodes.Node{emptyVal}
-	// Concreto exato hospedado ainda é elegível por hospedagem exata
-	// (independe do mapa), mas a categoria "vazia" nunca casa e a categoria
-	// pedida como nome não promove nenhuma variante.
+	// The exactly hosted concrete variant is still eligible through the exact
+	// hosting, which does not depend on the map, while the empty category never
+	// matches and a category requested by name promotes no variant.
 	assertBothSelectors(t, "f-exact-concrete", candidates, "alpr-yolo-tiny", map[string]bool{"m-empty": true})
 	assertBothSelectors(t, "f-category-request", candidates, "alpr-yolo", map[string]bool{})
 
-	// Helpers puros: valor vazio nunca vira categoria.
+	// The pure helpers: an empty value never becomes a category.
 	if got := EffectiveGroup("alpr-yolo-tiny", emptyVal); got != "alpr-yolo-tiny" {
 		t.Fatalf("EffectiveGroup(empty val) = %q, want verbatim", got)
 	}

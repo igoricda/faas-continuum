@@ -13,14 +13,14 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// queueFakeSelector devolve a fila verbatim e, quando predicted != nil,
-// implementa LatencyPredictor com previsão fixa por NodeID. Serve para os
-// testes da emenda de orçamento por tentativa (AUD-22/AUD-26, 2026-09-24).
-// newRequest, quando não-nil, implementa também NewRequestPredictor (a
-// previsão classe-aware do portão); nil devolve ok=false e o gateway cai na
-// previsão do orçamento. queueCap, quando não-nil, implementa
-// QueueCapPredictor (o teto de fila aprendido por NodeID); nil devolve
-// ok=false e o portão usa só a projeção previsto×k.
+// queueFakeSelector returns the queue verbatim and, when a prediction is given,
+// implements the latency predictor with a fixed prediction per node. It serves
+// the tests of the per-attempt budget. The request predictor, when given,
+// implements the prediction of a new request, which is the class-aware
+// prediction of the gate, and a nil value makes the gateway fall back to the
+// prediction of the budget. The queue ceiling, when given, implements the
+// learned ceiling per node, and a nil value makes the gate use only the
+// projection of the predicted load against the concurrency.
 type queueFakeSelector struct {
 	queue      []nodes.Node
 	predicted  map[string]int64
@@ -69,7 +69,7 @@ func TestAttemptSlice(t *testing.T) {
 		{name: "sem orcamento", remaining: 0, attemptsLeft: 2, want: 0},
 		{name: "ultima tentativa fica com tudo", remaining: 800 * time.Millisecond, attemptsLeft: 1, want: 800 * time.Millisecond},
 		{name: "divisao igual sem previsao", remaining: 800 * time.Millisecond, attemptsLeft: 2, want: 400 * time.Millisecond},
-		// D4 (2026-09-30): sem previsão, até METADE do restante (não a cota).
+		// Without a prediction, up to half of the remaining budget, and not the quota.
 		{name: "metade do restante sem previsao", remaining: 3 * time.Second, attemptsLeft: 3, want: 1500 * time.Millisecond},
 		{name: "d4: slo de 5s com 5 candidatos sem previsao", remaining: 5 * time.Second, attemptsLeft: 5, want: 2500 * time.Millisecond},
 		{name: "metade limitada pelo teto", remaining: 1600 * time.Millisecond, attemptsLeft: 4, want: 800 * time.Millisecond},
@@ -80,7 +80,7 @@ func TestAttemptSlice(t *testing.T) {
 		{name: "reserva o piso da proxima", remaining: 800 * time.Millisecond, attemptsLeft: 2, predicted: 500 * time.Millisecond, hasPredicted: true, want: 550 * time.Millisecond},
 		{name: "orcamento apertado divide igual", remaining: 100 * time.Millisecond, attemptsLeft: 2, want: 50 * time.Millisecond},
 		{name: "tres com previsao", remaining: 5 * time.Second, attemptsLeft: 3, predicted: time.Second, hasPredicted: true, want: 2 * time.Second},
-		// Emenda pós-simulação: reserva da nuvem.
+		// Reservation of the cloud.
 		{name: "ultima com reserva de nuvem", remaining: 5 * time.Second, attemptsLeft: 1, reserve: 2 * time.Second, want: 3 * time.Second},
 		{name: "ultima com reserva limitada a metade", remaining: 3 * time.Second, attemptsLeft: 1, reserve: 1500 * time.Millisecond, want: 1500 * time.Millisecond},
 		{name: "ultima apertada ignora reserva", remaining: 300 * time.Millisecond, attemptsLeft: 1, reserve: 150 * time.Millisecond, want: 300 * time.Millisecond},
@@ -118,12 +118,14 @@ func TestCloudReserve(t *testing.T) {
 	}
 }
 
-// TestAttemptViable fixa o portão de viabilidade: o TETO é o SLO declarado
-// (2026-10-01) — previsão acima da fatia mas dentro do SLO passa; acima do SLO
-// é pulada mesmo com fatia folgada. Sem SLO de latência, o teto é o orçamento
-// por nó/função (function_timeout_ms, limitado ao restante do invoke): a fatia
-// é janela de espera e não admite (usá-la degenerava em k≤2 — regressão da
-// rampa arb9 a 0,1 s); sem previsão e no último candidato, fail-open.
+// TestAttemptViable pins the gate of viability: the ceiling is the declared
+// objective, so a prediction above the slice but within the objective passes,
+// while a prediction above the objective is skipped even with a loose slice.
+// Without an objective of latency the ceiling is the budget per node and
+// function, limited to the remaining part of the invocation, since the slice is
+// a window of wait and does not admit a request, and using it would degenerate
+// the concurrency to two. Without a prediction and in the last candidate the
+// gate fails open.
 func TestAttemptViable(t *testing.T) {
 	cases := []struct {
 		name         string
@@ -141,17 +143,17 @@ func TestAttemptViable(t *testing.T) {
 		{"previsao igual ao teto passa", time.Second, time.Second, true, nil, 1, false, true},
 		{"sem slo: previsao acima do teto e pulada", 300 * time.Millisecond, 1500 * time.Millisecond, true, nil, 1, false, false},
 		{"slo vazio mantem o criterio do teto", 300 * time.Millisecond, 1500 * time.Millisecond, true, &selection.SLO{}, 1, false, false},
-		// Teto = SLO (campo 2026-10-01): a fatia dimensiona a espera, não admite.
+		// The ceiling is the objective, which sizes the wait and not the admission.
 		{"teto slo: previsto entre a fatia e o slo passa", 2720 * time.Millisecond, 3129 * time.Millisecond, true, &selection.SLO{MaxLatencyMS: 5000}, 1, false, true},
 		{"teto slo: previsto igual ao slo passa", 300 * time.Millisecond, 5000 * time.Millisecond, true, &selection.SLO{MaxLatencyMS: 5000}, 1, false, true},
 		{"teto slo: previsto acima do slo e pulada com fatia folgada", 10 * time.Second, 5001 * time.Millisecond, true, &selection.SLO{MaxLatencyMS: 5000}, 1, false, false},
 		{"ultimo candidato e sempre tentado", 300 * time.Millisecond, 1500 * time.Millisecond, true, nil, 1, true, true},
 		{"ultimo sem previsao tambem passa", 300 * time.Millisecond, 0, false, nil, 1, true, true},
-		// Admissão por carga (2026-10-01/2): k≥2 projeta a fila na previsão.
+		// Admission by load: with at least two requests in flight the queue enters the prediction.
 		{"carga k=2: previsto entre a fatia e o slo e pulada", 2720 * time.Millisecond, 3129 * time.Millisecond, true, &selection.SLO{MaxLatencyMS: 5000}, 2, false, false},
 		{"carga k=2: ultimo candidato tambem e pulado", 2720 * time.Millisecond, 3129 * time.Millisecond, true, &selection.SLO{MaxLatencyMS: 5000}, 2, true, false},
 		{"carga k=2 com folga no slo passa", time.Second, time.Second, true, &selection.SLO{MaxLatencyMS: 5000}, 2, false, true},
-		// Sem SLO: teto = orçamento por nó/função (nunca a fatia).
+		// Without an objective, the ceiling is the budget per node and function, and never the slice.
 		{"carga sem slo: projecao acima do orcamento e pulada", 3 * time.Second, 2 * time.Second, true, nil, 2, false, false},
 		{"carga sem slo: projecao dentro do orcamento passa", 5 * time.Second, 2 * time.Second, true, nil, 2, false, true},
 		{"regressao arb9: borda 45s admite 443ms com k=3", 45 * time.Second, 443 * time.Millisecond, true, nil, 3, false, true},
@@ -170,11 +172,12 @@ func TestAttemptViable(t *testing.T) {
 	}
 }
 
-// TestGateway_AttemptBudgetPortaoDeViabilidade é o efeito do portão no
-// dispatch: o primeiro candidato tem p95 (1500 ms) acima da fatia que
-// receberia (300 ms) e é PULADO sem ser chamado; o segundo (p95 50 ms) roda
-// com fatia maior e responde. Antes do portão, o primeiro queimava a fatia e
-// virava um `orcamento_excedido` (artefato do árbitro) antes do failover.
+// TestGateway_AttemptBudgetPortaoDeViabilidade covers the effect of the gate on
+// the dispatch: the first candidate has a percentile above the slice it would
+// receive and is skipped without being called, while the second runs with a
+// larger slice and answers. Without the gate the first one burned the slice and
+// became an exceeded budget, which is an artifact of the arbiter, before the
+// failover.
 func TestGateway_AttemptBudgetPortaoDeViabilidade(t *testing.T) {
 	var aCalls, bCalls, cCalls int32
 	unviable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -236,18 +239,19 @@ func TestGateway_AttemptBudgetPortaoDeViabilidade(t *testing.T) {
 	}
 }
 
-// TestGateway_PortaoTetoSLO é a regressão da validação da TG3 (2026-10-01,
-// SLO 5 s): o primeiro candidato tem p95 do segmento 3.129 ms — acima da
-// fatia de 2.750 ms que ele receberia com a reserva de nuvem de 2 s, e ABAIXO
-// do SLO de 5.000 ms. O teto é o SLO: o nó roda e responde. Antes, o portão
-// pulava por `previsto > fatia` e as 51 requisições iam para a nuvem com a
-// borda ociosa (23 acima do SLO). O segundo caso fixa o estimador do portão:
-// vale a previsão classe-aware (solo em nó ocioso), não o p95 misto.
+// TestGateway_PortaoTetoSLO is the regression of the validation with a five
+// second objective: the first candidate has a percentile of the segment of about
+// three seconds, which is above the slice of two and a half seconds it would
+// receive with the cloud reservation and below the objective. The ceiling is the
+// objective, so the node runs and answers. Previously the gate skipped it because
+// the prediction exceeded the slice and the requests went to the cloud with the
+// edge idle. The second case pins the estimator of the gate, which uses the
+// class-aware prediction of an idle node and not the mixed percentile.
 func TestGateway_PortaoTetoSLO(t *testing.T) {
 	cases := []struct {
 		name     string
-		segmento map[string]int64 // previsão do orçamento (dimensiona a fatia)
-		classe   map[string]int64 // previsão da admissão (julga o teto)
+		segmento map[string]int64 // prediction of the budget, which sizes the slice
+		classe   map[string]int64 // prediction of the admission, which judges the ceiling
 	}{
 		{
 			name:     "previsto entre a fatia e o slo e tentado",
@@ -297,8 +301,8 @@ func TestGateway_PortaoTetoSLO(t *testing.T) {
 					predicted:  tc.segmento,
 					newRequest: tc.classe,
 				},
-				// Nuvem CONFIGURADA: a reserva de 2 s encolhe a fatia do 1º
-				// candidato para ~2.750 ms — abaixo da previsão de 3.129 ms.
+				// A configured cloud shrinks the slice of the first candidate to
+				// about two and a half seconds, below the prediction of three.
 				RemoteExecutor: newTestRemoteExecutor(t, cloudSrv.URL),
 				DefaultBudget:  5 * time.Second,
 			})
@@ -328,13 +332,13 @@ func TestGateway_PortaoTetoSLO(t *testing.T) {
 	}
 }
 
-// TestGateway_PortaoAdmissaoPorCarga é o efeito da admissão por carga no
-// dispatch (2026-10-01/2): com o nó "a" JÁ em voo (k=2 na segunda chamada), o
-// portão pula "a" mesmo dentro do SLO declarado e serve por "b" — antes, a
-// rajada empilhava no mesmo nó (34 tentativas perdedoras do xp4 na bateria
-// arb8) até o cap do nó. A primeira chamada prova que k≤1 preserva o
-// comportamento de 2026-10-01 (nó ocioso é tentado, mesmo com a fatia menor
-// que a previsão).
+// TestGateway_PortaoAdmissaoPorCarga covers the effect of the admission by load
+// on the dispatch: with the node already in flight, at two requests on the
+// second call, the gate skips it even within the declared objective and serves
+// through the second node, since previously the burst piled up on the same node
+// up to its ceiling. The first call proves that a single request in flight
+// preserves the previous behavior, where an idle node is attempted even with a
+// slice smaller than the prediction.
 func TestGateway_PortaoAdmissaoPorCarga(t *testing.T) {
 	started := make(chan struct{}, 1)
 	release := make(chan struct{})
@@ -391,17 +395,17 @@ func TestGateway_PortaoAdmissaoPorCarga(t *testing.T) {
 		return rec
 	}
 
-	// 1ª chamada: "a" ocioso (k=1) → tentado e mantido em voo pelo handler.
+	// First call: the node is idle, with one request in flight, so it is attempted and kept in flight by the handler.
 	var rec1 *httptest.ResponseRecorder
 	done1 := make(chan struct{})
 	go func() {
 		defer close(done1)
 		rec1 = invoke()
 	}()
-	<-started // Inc de "a" feito; Dec só depois do release.
+	<-started // the increase of the first node is done, and the decrement happens only after the release
 
-	// 2ª chamada com "a" em voo (k=2): projeção 3.129×2 > SLO 5.000 → pulado;
-	// "b" (k=1, p95 50 ms) atende.
+	// Second call with the first node in flight: the projection of twice the
+	// prediction exceeds the objective, so it is skipped and the second node serves.
 	rec2 := invoke()
 	close(release)
 	<-done1
@@ -426,11 +430,12 @@ func TestGateway_PortaoAdmissaoPorCarga(t *testing.T) {
 	}
 }
 
-// TestGateway_AttemptBudgetLiberaFallback é o teste central da emenda: a
-// tentativa 1 (borda, lenta) estoura a FATIA (piso de 250 ms com previsão de
-// 100 ms) e o orçamento overall segue vivo — a tentativa 2 (névoa, rápida) é
-// executada e responde 200. Antes da emenda, o ctx único já estava expirado e
-// a névoa morria em CONTEXT_CANCELED sem ser tentada.
+// TestGateway_AttemptBudgetLiberaFallback is the central test of the change: the
+// first attempt, on the slow edge, exceeds the slice, with a floor of two hundred
+// and fifty milliseconds and a prediction of one hundred, and the overall budget
+// stays alive, so the second attempt, on the fast fog, runs and answers. Before
+// the change the single context had already expired and the fog died cancelled
+// without being attempted.
 func TestGateway_AttemptBudgetLiberaFallback(t *testing.T) {
 	var slowCalls, fastCalls int32
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -484,10 +489,10 @@ func TestGateway_AttemptBudgetLiberaFallback(t *testing.T) {
 	}
 }
 
-// TestGateway_AttemptBudgetDivisaoIgual cobre o caminho SEM previsão
-// (QueueSelector baseline): a fatia de 400 ms de 800 ms (com 2 candidatos,
-// metade do restante coincide com a cota igualitária) libera a segunda
-// tentativa do mesmo jeito.
+// TestGateway_AttemptBudgetDivisaoIgual covers the path without a prediction, in
+// the baseline of the hard limits: the slice of four hundred milliseconds out of
+// eight hundred, with two candidates, coincides with the equal quota and releases
+// the second attempt in the same way.
 func TestGateway_AttemptBudgetDivisaoIgual(t *testing.T) {
 	var slowCalls, fastCalls int32
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -535,11 +540,12 @@ func TestGateway_AttemptBudgetDivisaoIgual(t *testing.T) {
 	}
 }
 
-// TestGateway_AttemptBudgetReservaNuvem ancora a emenda pós-simulação: com
-// nuvem CONFIGURADA, a última tentativa local reserva até 2 s (p95 real do
-// fallback warm = 1,9 s) e o nó lento NÃO consome o orçamento inteiro —
-// antes, o estouro da última tentativa zerava o remaining e o cliente
-// recebia 504 sem a nuvem ser tentada.
+// TestGateway_AttemptBudgetReservaNuvem anchors the reservation of the cloud:
+// with a cloud configured, the last local attempt reserves up to two seconds,
+// which is the real percentile of a warm fallback, and the slow node does not
+// consume the whole budget. Previously the overflow of the last attempt zeroed
+// the remaining budget and the client received a timeout without the cloud being
+// attempted.
 func TestGateway_AttemptBudgetReservaNuvem(t *testing.T) {
 	var slowCalls, cloudCalls int32
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -586,10 +592,11 @@ func TestGateway_AttemptBudgetReservaNuvem(t *testing.T) {
 	}
 }
 
-// TestGateway_AttemptBudgetNuvemAlcancavel garante que o fallback de nuvem
-// continua enxergando o RESTANTE do overall: a borda estoura a fatia, a névoa
-// devolve 503 rápido e a nuvem responde — cenário impossível antes da emenda
-// (o ctx único morria na borda e a nuvem via remaining<=0).
+// TestGateway_AttemptBudgetNuvemAlcancavel guarantees that the cloud fallback
+// keeps seeing the rest of the overall budget: the edge exceeds the slice, the
+// fog answers a fast rejection and the cloud answers, which was impossible
+// before the change, when the single context died at the edge and the cloud saw
+// a non-positive remaining budget.
 func TestGateway_AttemptBudgetNuvemAlcancavel(t *testing.T) {
 	var slowCalls, cloudCalls int32
 	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

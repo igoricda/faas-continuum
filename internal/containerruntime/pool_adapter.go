@@ -69,7 +69,7 @@ type PoolAdapter struct {
 	GPUForImage func(imageRef string) bool
 
 	mu      sync.Mutex
-	handles map[string]*Handle // instanceID -> handle em execução
+	handles map[string]*Handle // instance identifier to the running handle
 }
 
 // socketDir returns the path of the socket directory on the host for a

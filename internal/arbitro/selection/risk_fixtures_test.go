@@ -1,15 +1,20 @@
-// Fixtures numéricas de decisão (SELETOR-V2 §13): sem aleatoriedade
-// (band=0, explore=0, Rand nil), tudo warm, nenhuma requisição termina
-// entre decisões (k só cresce no nó escolhido).
+// Numerical fixtures of the decision, without randomness, with a zero band, no
+// exploration and no random generator, with every node warm, and with no request
+// finishing between decisions, so the number of requests in flight only grows on
+// the chosen node.
 //
-// Cenário: borda c=2, S=1,0s; névoa c=4, S=0,8s; W = max(0,k+1−c)·S/c;
-// stretch=2; queue_allowance=1.0 (teto: borda 4, névoa 8).
+// Scenario: the edge with a capacity of two and a service time of one second,
+// the fog with a capacity of four and a service time of eight tenths of a
+// second, the wait of the excess over the capacity scaled by the service time,
+// a stretch of two and a queue allowance of one, which gives a ceiling of four
+// on the edge and of eight on the fog.
 //
-// Seed determinístico (sem RNG): 500 sucessos idênticos por nó (M=1).
-// O S_up aprendido excede S_med em ~2% (t-quantil com n=500), o que
-// preserva todas as margens da tabela EXCETO o empate idealizado da
-// 8ª decisão sem SLO... (ver TestRiskFixture_NoSLO). A linha com SLO
-// diverge em 1 decisão pelo mesmo motivo (ver TestRiskFixture_SLO).
+// The seed is deterministic, without a random generator: five hundred identical
+// successes per node. The learned upper bound of the service time exceeds the
+// measured value by about two percent, from the quantile with five hundred
+// samples, which preserves every margin of the table except the idealized tie of
+// the eighth decision without an objective. The row with an objective diverges in
+// one decision for the same reason.
 package selection
 
 import (
@@ -53,7 +58,7 @@ func newFixtureWorld(t *testing.T, cfg RiskConfig) *fixtureWorld {
 	g := &fixtureGauge{k: map[string]int{}}
 	learner := learn.NewLearner(cfg.LearnConfig())
 	group := ResolveRequestGroup("fn", []nodes.Node{borda, nevoa})
-	// Seed idêntico e determinístico: S=1,0s na borda, S=0,8s na névoa.
+	// The seed is identical and deterministic, with one second on the edge and eight tenths of a second on the fog.
 	for i := 0; i < 500; i++ {
 		learner.Observe(group, "borda", learn.Obs{At: fixtureTime, Outcome: learn.OutcomeSuccess, LatencyMS: 1000, UseRegr: true, M: 1})
 		learner.Observe(group, "nevoa", learn.Obs{At: fixtureTime, Outcome: learn.OutcomeSuccess, LatencyMS: 800, UseRegr: true, M: 1})
@@ -114,14 +119,15 @@ func TestRiskFixture_NoSLO(t *testing.T) {
 	}
 }
 
-// TestRiskFixture_SLO: SLO T=1,2s, stretch_slo=0.
+// TestRiskFixture_SLO covers the table with an objective of twelve hundred
+// milliseconds and without a stretch on the objective.
 //
-// DIVERGÊNCIA da tabela idealizada (§13): a tabela dá
-// "B B N N N N N N ∅ ∅" com B_nevoa = T = 1,2s exatos na 8ª decisão.
-// Num modelo aprendido, S_up > S_med estritamente (t-quantil com
-// alpha < 0.5), então B_nevoa = 0,4·S_med + S_up > 1,2s e a 8ª decisão
-// já transborda para a nuvem: "B B N N N N N ∅ ∅ ∅". O regime é o
-// mesmo (saturação => nuvem, uma decisão antes); registrar no ADR-0012.
+// The idealized table has the fog exactly at the objective on the eighth
+// decision, but in a learned model the upper bound of the service time is
+// strictly above the measured value, since the quantile is taken below one half,
+// so the bound exceeds the objective and the eighth decision already overflows to
+// the cloud. The regime is the same, with saturation leading to the cloud one
+// decision earlier, which is recorded in the documentation of the selector.
 func TestRiskFixture_SLO(t *testing.T) {
 	w := newFixtureWorld(t, fixtureCfg())
 	slo := &SLO{MaxLatencyMS: 1200}

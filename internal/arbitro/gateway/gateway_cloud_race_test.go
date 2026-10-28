@@ -1,16 +1,15 @@
 package gateway
 
-// Testes da corrida nuvem×espera (adendo 2026-09-30, Passo 4.7, D6 — política
-// única, sem knob): nuvem vence com pendências canceladas; órfão vence com a
-// nuvem cancelada e registrada; sem pendências o caminho é o de hoje; a nuvem
-// enxerga o prazo do hard; no estouro do hard a nuvem perdedora registra
-// sozinha (T6c).
+// Tests of the race between the cloud and the wait, which is a single policy
+// without a switch: the cloud wins with the pending reports cancelled, an orphan
+// wins with the cloud cancelled and recorded, without pending reports the path is
+// the previous one, the cloud sees the hard deadline, and when the hard deadline
+// expires the losing cloud records alone.
 //
-// Gate test-audit: cada caso protege um ramo distinto da corrida, sem dono
-// anterior. Regressões críveis: nuvem sequencial após a espera (perde
-// entregas), perdedora sem registro (replay cego) ou deadline no overall em
-// vez do hard (mata a janela da nuvem fria). Reaproveita fakeRemote como
-// modelo, com variante própria com atraso/deadline (sem seam novo).
+// Each case protects a distinct branch of the race. The credible regressions are
+// a sequential cloud after the wait, which loses deliveries, a loser without a
+// record, which blinds the replay, and a deadline on the overall budget instead
+// of the hard one, which kills the window of a cold cloud.
 import (
 	"context"
 	"encoding/json"
@@ -29,9 +28,10 @@ import (
 	"github.com/igoricda/faas-continuum/internal/arbitro/selection"
 )
 
-// raceRemote é o RemoteExecutor controlável da corrida: atraso ou gate,
-// captura do deadline do contexto (para provar o hard) e respeito ao
-// cancelamento (para o join determinístico da perdedora).
+// raceRemote is the controllable remote executor of the race: it delays or gates
+// the answer, captures the deadline of the context, which proves the hard
+// deadline, and honors the cancellation, which makes the join of the loser
+// deterministic.
 type raceRemote struct {
 	configured bool
 	delay      time.Duration
@@ -123,9 +123,9 @@ func hasCloudLine(recs []InvocationRecord) bool {
 	return false
 }
 
-// Nuvem vence: entrega o corpo da nuvem; a órfã local NÃO é cancelada
-// (2026-10-01/2) — segue até concluir, é assentada com o desfecho real
-// (aprendizado; supersede do orcamento_excedido) e não é entrega.
+// The cloud wins: it delivers the body of the cloud, and the local orphan is not
+// cancelled, so it runs to completion, is settled with the real outcome, which
+// feeds the learning and supersedes the exceeded budget, and is not delivered.
 func TestCloudRaceCloudWins(t *testing.T) {
 	srv, release := blockedNodeServer(t)
 	var releaseOnce sync.Once
@@ -161,8 +161,8 @@ func TestCloudRaceCloudWins(t *testing.T) {
 	if !hasCloudLine(recs) {
 		t.Fatalf("nuvem vencedora sem linha no invLog")
 	}
-	// Libera a órfã: o drain pós-resposta a assenta com o desfecho real —
-	// supersede o orcamento_excedido no histórico, sem entrega ao cliente.
+	// Releasing the orphan lets the drain after the answer settle it with the real
+	// outcome, which supersedes the exceeded budget in the history without a delivery to the client.
 	releaseOrphan()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -197,7 +197,7 @@ func TestCloudRaceCloudWins(t *testing.T) {
 	}
 }
 
-// Órfão vence: nuvem cancelada, mas com a tentativa no invLog (replay/warm).
+// An orphan wins: the cloud is cancelled but the attempt stays in the log, which feeds the replay and the warm path.
 func TestCloudRaceOrphanWins(t *testing.T) {
 	srv := lateSuccessServer(t, 300*time.Millisecond, `{"result":"tardio"}`)
 	ns, _ := nodes.NewNodeStore("")
@@ -234,8 +234,8 @@ func TestCloudRaceOrphanWins(t *testing.T) {
 	}
 }
 
-// Sem pendências (nó legado): o caminho é o de hoje — nuvem sequencial após
-// a fila, sem marca tardia e sem contadores.
+// Without pending reports, from a legacy node, the path is the previous one,
+// with a sequential cloud after the queue, without the late mark and without the counters.
 func TestCloudRaceNoPendencyLegacyPath(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -267,7 +267,7 @@ func TestCloudRaceNoPendencyLegacyPath(t *testing.T) {
 	}
 }
 
-// A nuvem enxerga o prazo do hard (D3), não o overall.
+// The cloud sees the hard deadline, and not the overall budget.
 func TestCloudRaceSeesHardDeadline(t *testing.T) {
 	srv, release := blockedNodeServer(t)
 	defer close(release)
@@ -292,8 +292,8 @@ func TestCloudRaceSeesHardDeadline(t *testing.T) {
 	}
 }
 
-// T6c: prazo rígido estoura com a nuvem ainda viva — a perdedora é registrada
-// sozinha no invLog (replay/warm), mesmo que o Handle retorne antes do append.
+// The hard deadline expires with the cloud still alive, so the loser records
+// alone in the log, for the replay and the warm path, even when the handler returns before the append.
 func TestCloudRaceExpiryRegistersCloud(t *testing.T) {
 	srv, release := blockedNodeServer(t)
 	defer close(release)
@@ -310,9 +310,9 @@ func TestCloudRaceExpiryRegistersCloud(t *testing.T) {
 	if _, served, expired, _ := gw.BestEffortCounters(); served != 0 || expired > 1 {
 		t.Fatalf("served=%d expired=%d want 0/<=1 (sem entrega; cap×prazo empatam)", served, expired)
 	}
-	// A nuvem morre no próprio deadline (== hard) e registra na goroutine,
-	// possivelmente após o Handle retornar: espera curta com prazo. Procura o
-	// NodeID no texto bruto (sem parse) para não tropeçar em linha parcial.
+	// The cloud dies at its own deadline, which is the hard one, and records in the
+	// goroutine, possibly after the handler returns, so the test waits a short
+	// deadline and looks for the node identifier in the raw text, which avoids a partial line.
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		raw, _ := os.ReadFile(logPath)

@@ -1,5 +1,5 @@
-// Exposição observacional selection_risk* no GET /nodes (SELETOR-V2 §11):
-// omitidos sem fiação (algo=v1), presentes com fiação.
+// Observational exposure of the selection risk in the listing of the nodes: the
+// fields are omitted without the wiring and present with it.
 package server
 
 import (

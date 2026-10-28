@@ -1,5 +1,5 @@
-// Benchmarks de Select do seletor canônico (SELETOR-V2 §13 A5): 4 nós,
-// learner semeado. Bench só mede, sem asserção de ordem.
+// Benchmarks of the selection in the canonical selector, with four nodes and a
+// seeded learner. A benchmark only measures, without an assertion on the order.
 package selection
 
 import (

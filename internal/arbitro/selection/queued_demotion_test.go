@@ -10,11 +10,11 @@ import (
 	"github.com/igoricda/faas-continuum/internal/telemetry"
 )
 
-// TestQueueSelectorQueueDepthDemotion prova a demotion por ocupação do pool
-// no caminho hard-limits (emenda 2026-09-24, D36): a borda com QueueDepth>0
-// fresco entra atrás da névoa ociosa mesmo preferindo borda por camada; com
-// fila sozinha o nó continua elegível (demotion, nunca remoção) e
-// capacidade desconhecida/TTL expirado conta como ociosa (fail-open).
+// TestQueueSelectorQueueDepthDemotion proves the demotion by occupancy of the
+// pool in the hard-limit path: the edge with a fresh positive queue depth enters
+// behind the idle fog even when it would be preferred by layer, a node with a
+// queue alone stays eligible, since the demotion never removes the node, and an
+// unknown capacity or an expired reading counts as idle, which is the fail-open.
 func TestQueueSelectorQueueDepthDemotion(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	edge := nodes.Node{NodeID: "edge", Layer: nodes.LayerBorda, Host: "h1", Functions: []string{"lpr"}}

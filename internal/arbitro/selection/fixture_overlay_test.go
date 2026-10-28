@@ -1,16 +1,17 @@
 package selection
 
-// Helpers do harness de auditoria D32 (uso_band_audit_test.go): fixture r4
-// pinada + overlay de USO sintético determinístico (Track C — TVBox sem
-// CONFIG_PSI, PSI forçado unknown). Extraídos do ciclo v1 quando o
-// SelfLearningSelector foi aposentado (ADR-0012): o harness auditava a
-// banda preditiva do BLR no caminho usage-curve, que agora é apenas
-// exercitada pelo próprio pacote history — a fixture e o overlay seguem
-// aqui para a auditoria de calibração continuar reexecutável.
+// Helpers of the audit harness: a pinned fixture plus a deterministic overlay of
+// synthetic usage, which covers a device without pressure data, where the
+// pressure is forced to unknown. They were extracted from the previous cycle
+// when the previous selector was retired, since the harness audited the
+// predictive band of the Bayesian regression on the usage curve, which the
+// history package now exercises on its own, and the fixture and the overlay stay
+// here so the calibration audit remains reproducible.
 //
-// A fixture é carregada via tipos de produção (sem schema paralelo) e só
-// chaves PRIMÁRIAS são re-appendadas (o fan-out de AppendWithGroup recria
-// as agg); re-appendar as agg DUPLICARIA a população.
+// The fixture is loaded through the production types, without a parallel schema,
+// and only the primary keys are appended again, since the fan-out of the grouped
+// append recreates the aggregated keys, and appending them again would duplicate
+// the population.
 
 import (
 	"encoding/json"
@@ -35,8 +36,8 @@ const (
 // rgUsageSrc rotula o overlay do Track C em cada linha de segmento.
 const rgUsageSrc = "usage-overlay(hash,fnv-key-idx,psi=0)"
 
-// rgUsageSample é um ponto warm-solo do overlay com seu uso sintético e a
-// latência REAL da fixture.
+// rgUsageSample is a warm solo point of the overlay, with its synthetic usage
+// and the real latency of the fixture.
 type rgUsageSample struct {
 	ts  time.Time
 	x   float64
@@ -44,7 +45,7 @@ type rgUsageSample struct {
 	lat float64
 }
 
-// rgRaw carrega a fixture via tipos de produção (sem schema paralelo).
+// rgRaw loads the fixture through the production types, without a parallel schema.
 func rgRaw(t *testing.T) map[string][]history.Entry {
 	t.Helper()
 	raw, err := os.ReadFile(rgFixtureRel)
@@ -95,9 +96,11 @@ func rgMedian(xs []float64) (float64, bool) {
 	return (cp[n/2-1] + cp[n/2]) / 2, true
 }
 
-// rgSynthUsage deriva uso sintético determinístico por (chave, índice):
-// base por bucket (preserva rank de carga) + jitter ±1.5 via FNV-1a.
-// Sempre >0 (nunca unknown); sem RNG, sem estado, ordem-independente.
+// rgSynthUsage derives a deterministic synthetic usage per key and index, with a
+// base per load bucket, which preserves the rank of the load, plus a jitter of
+// one and a half percent from a hash. The value is always positive and never
+// unknown, and there is no random generator, no state and no dependence on the
+// order.
 func rgSynthUsage(key string, idx int, bucket string) (float64, float64) {
 	var baseX, baseY float64
 	switch bucket {
@@ -137,11 +140,12 @@ func rgSynthUsage(key string, idx int, bucket string) (float64, float64) {
 	return x, y
 }
 
-// rgBuildUsageOverlay constrói a cópia scratch do Track C: PSI zerado
-// (unknown), eixos de uso sintéticos. Só chaves PRIMÁRIAS são re-appendadas
-// (o fan-out de AppendWithGroup recria as agg); re-appendar as agg
-// DUPLICARIA a população. Devolve o histórico, o mapa warm-solo por chave
-// e layer por nó.
+// rgBuildUsageOverlay builds the scratch copy of the synthetic usage track, with
+// the pressure zeroed, which means unknown, and synthetic usage axes. Only the
+// primary keys are appended again, since the fan-out of the grouped append
+// recreates the aggregated keys, and appending them again would duplicate the
+// population. It returns the history, the map of warm solo samples per key and
+// the layer per node.
 func rgBuildUsageOverlay(t *testing.T, segs map[string][]history.Entry) (*history.History, map[string][]rgUsageSample, map[string]string) {
 	t.Helper()
 	h, err := history.NewHistory("", 1000)
@@ -188,7 +192,7 @@ func rgBuildUsageOverlay(t *testing.T, segs map[string][]history.Entry) (*histor
 			}
 		}
 	}
-	// Gate de integridade do overlay: mesma população da fixture.
+	// Integrity gate of the overlay: the same population as the fixture.
 	var total int
 	for _, k := range h.Keys() {
 		_, _, _, segTotal, _, _ := h.StatsAndRecent(k, 0, time.Time{})

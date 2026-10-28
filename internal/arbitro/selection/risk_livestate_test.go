@@ -1,4 +1,4 @@
-// Estado vivo e teto estático (SELETOR-V2 §6.5, §7.4).
+// Live state and the static ceiling of the selector.
 package selection
 
 import (
@@ -20,7 +20,7 @@ func TestLiveStateForNode(t *testing.T) {
 	if live.KFn != 7 {
 		t.Fatalf("fila: KFn=%d want 7 (c+queue)", live.KFn)
 	}
-	// Marca de exaustão: warm no teto (zero NÃO é cold), k_fn >= c.
+	// Exhaustion mark: a warm node at the ceiling, since zero is not cold, with the number of requests in flight at the capacity.
 	fcZero := telemetry.FunctionCapacity{MaxInstances: 4, InstancesAvailable: 0}
 	live, cold, _ = liveStateForNode(capacityRead{fc: fcZero, mark: true, ok: true}, 0, 0, 1)
 	if cold || live.KFn != 4 {

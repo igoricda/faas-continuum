@@ -1,15 +1,16 @@
 package selection
 
-// Report-only calibration audit for Tier0/Tier1 (ADR-0007 D32): on the
-// Track C overlay (real latencies/outcomes, synthetic usage axes, PSI
-// forced unknown) logs per-bucket coverage + mean relative width + mean
-// Winkler interval score (alpha=0.10: IS=(u-l)+20*exceedance, interval
-// [point, upper], y=SoloP95MS), q-hat availability, and ready/veto counts
-// with vs without q-hat at SLO 8000. Harness-only, zero production
-// change. Assertions are limited to finite/no-NaN/non-negative — NO gates
-// on values (coverage alone is not proper; the triple is for audit, per
-// the Kuleshov recalibration critique the per-bucket split stays
-// observational, never a retarget of the band).
+// Report-only calibration audit of the parametric band and of its conformal
+// correction: on the synthetic overlay, with real latencies and outcomes,
+// synthetic usage axes and the pressure forced to unknown, it logs the coverage
+// per bucket, the mean relative width and the mean interval score, the
+// availability of the conformal correction and the counts of ready and vetoed
+// nodes with and without the correction at an objective of eight seconds. It is
+// harness only, with no change to the production code. The assertions are limited
+// to finite, non-NaN and non-negative values, and there are no gates on the
+// values, since the coverage alone is not a proper score and the triple is for
+// the audit: the split per bucket stays observational and never retargets the
+// band.
 
 import (
 	"math"
@@ -140,7 +141,8 @@ func TestUsageBandCalibrationAudit(t *testing.T) {
 		t.Logf("AUDIT janela=%v segs=%d coverage=%.3f meanWidthRel=%.4f meanIS=%.1f qhat=%d/%d veto@slo8000 full=%d param=%d delta=%+d",
 			w, len(rows), float64(covN)/float64(covD), sumW/float64(len(rows)), sumIS/float64(len(rows)),
 			withQ, len(rows), vetoFull, vetoParam, vetoFull-vetoParam)
-		// Sem guarda de buckets: len(buckets)==0 <=> len(rows)==0, e rows==0 já
-		// aborta com t.Fatalf acima. A asserção anterior era inalcançável.
+		// Without a guard on the buckets: an empty bucket list is equivalent to an
+		// empty row list, and an empty row list already aborts with a fatal error
+		// above, so the previous assertion was unreachable.
 	}
 }

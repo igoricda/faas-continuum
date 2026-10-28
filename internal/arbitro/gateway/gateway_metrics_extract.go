@@ -113,12 +113,12 @@ func resourceProfileOfMetrics(metrics json.RawMessage) (cpuPctAvg, cpuPctPeak fl
 	return cpuAvg, cpuPeak, v.ResourceProfile.MemPeakBytes, v.ResourceProfile.SampleCount
 }
 
-// phasesOfMetrics extracts the phases of the invocation, which are the wait
+// phasesOfMetrics extracts the stages of the invocation, which are the wait
 // of the acquisition, the readiness and the function time. The decoding is
 // tolerant, in the same pattern as the resource profile: an absent blob,
 // invalid JSON, a wrong type or an absent block or key gives zeros and
 // never an error. It is capture only, since the late report does not carry
-// the phases on the wire and inherits them through the live reference.
+// the stages on the wire and inherits them through the live reference.
 func phasesOfMetrics(metrics json.RawMessage) (acquireWaitMS, readinessMS, functionMS int64) {
 	var v struct {
 		Phases *struct {
