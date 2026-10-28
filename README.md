@@ -342,6 +342,11 @@ The statistical and scheduling foundations of the selector are:
   2021, and L. Huang et al., *Metastable Failures in the Wild*, OSDI
   2022.
 
+The LPR models were trained using the Rodosol ALPR dataset:
+- R. Laroca, E. V. Cardoso, D. R. Lucio, V. Estevam, and D. Menotti, ''On the Cross-dataset Generalization in License Plate Recognition'' in International Conference on Computer Vision Theory and Applications (VISAPP), pp. 166-178, Feb 2022.
+
+The OCR models were based on https://github.com/ankandrew/fast-plate-ocr and finetuned with the Rodosol dataset.
+
 The foundations of the container runtime and of the interfaces are the
 OCI image specification, the containerd API and the gRPC HTTP/2 protocol.
 
