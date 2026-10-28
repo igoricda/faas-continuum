@@ -1,0 +1,1 @@
+{"cold_start":false,"function_time_ms":42,"instance_id":"inst-bad-1","response_time_ms":50,"telemetry":{"capacity":{"alpr":{"queue_depth":"lotado"}},"cpu_pressure":{"avg10":"alta"},"cpu_usage_pct":31.5,"memory_pressure_full":[8.25],"memory_usage_pct":44.0}}

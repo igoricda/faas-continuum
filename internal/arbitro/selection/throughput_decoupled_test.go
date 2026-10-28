@@ -1,0 +1,127 @@
+// Throughput desacoplado (task-14, estende D18): a vazão só participa de
+// uma decisão quando MinThroughputRPS>0 está declarado no SLO daquela
+// decisão. Este arquivo pina o curto-circuito explícito:
+//
+//   - SLO só-latência => OrderByFit nunca consulta RecentRPS (candidatos
+//     que diferem SÓ no RPS mantêm a ordem do p95);
+//   - SLO misto (latência+vazão) => ordena por p95, desempate por RPS;
+//   - ThroughputCriterion.Segment sem declarado => (false,false)
+//     (não-aplicável, sem pânico); com declarado => comportamento de antes;
+//   - HardLimit da vazão segue sempre-true.
+//
+// OrderByFit é compartilhado pelo QueueSelector (RankNodes) — o
+// desacoplamento continua valendo no único seletor canônico
+// (RiskSelector consome os critérios pelo mesmo par).
+package selection
+
+import (
+	"testing"
+
+	"github.com/igoricda/faas-continuum/internal/arbitro/nodes"
+)
+
+func TestThroughputDecoupled(t *testing.T) {
+	borda := func(id string) nodes.Node {
+		return nodes.Node{NodeID: id, Layer: nodes.LayerBorda, Host: "h-" + id}
+	}
+
+	t.Run("latency-only OrderByFit ignores RPS", func(t *testing.T) {
+		slo := &SLO{MaxLatencyMS: 5000}
+		// b1 rápido com RPS irrisório; b2 lento com RPS gigante.
+		segs := map[string]SegmentStats{
+			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.01},
+			"b2": {Count: 20, P95LatencyMS: 300, RecentRPS: 500},
+		}
+		out := OrderByFit([]nodes.Node{borda("b2"), borda("b1")}, nil, segs, DefaultCriteria, slo)
+		if len(out) != 2 || out[0].NodeID != "b1" || out[1].NodeID != "b2" {
+			t.Fatalf("SLO só-latência deveria ordenar por p95 ignorando RPS, obteve %v", nodeIDs(out))
+		}
+		// Invertido: lento com RPS gigante continua por último.
+		segsInv := map[string]SegmentStats{
+			"b1": {Count: 20, P95LatencyMS: 300, RecentRPS: 500},
+			"b2": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.01},
+		}
+		out = OrderByFit([]nodes.Node{borda("b1"), borda("b2")}, nil, segsInv, DefaultCriteria, slo)
+		if len(out) != 2 || out[0].NodeID != "b2" || out[1].NodeID != "b1" {
+			t.Fatalf("RPS gigante não pode promover nó lento em SLO só-latência, obteve %v", nodeIDs(out))
+		}
+	})
+
+	t.Run("latency-only identical p95 keeps input order despite RPS gap", func(t *testing.T) {
+		slo := &SLO{MaxLatencyMS: 5000}
+		segs := map[string]SegmentStats{
+			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 1},
+			"b2": {Count: 20, P95LatencyMS: 100, RecentRPS: 999},
+		}
+		in := []nodes.Node{borda("b2"), borda("b1")}
+		out := OrderByFit(in, nil, segs, DefaultCriteria, slo)
+		if len(out) != 2 || out[0].NodeID != "b2" || out[1].NodeID != "b1" {
+			t.Fatalf("RPS não pode reordenar SLO só-latência, obteve %v", nodeIDs(out))
+		}
+	})
+
+	t.Run("mixed SLO orders by p95 then RPS tie-break", func(t *testing.T) {
+		slo := &SLO{MaxLatencyMS: 5000, MinThroughputRPS: 0.2}
+		// Empate no p95: maior RPS vence.
+		tied := map[string]SegmentStats{
+			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 5},
+			"b2": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.5},
+		}
+		out := OrderByFit([]nodes.Node{borda("b2"), borda("b1")}, nil, tied, DefaultCriteria, slo)
+		if len(out) != 2 || out[0].NodeID != "b1" {
+			t.Fatalf("empate no p95 deveria desempatar por RPS, obteve %v", nodeIDs(out))
+		}
+		// p95 domina: rápido com RPS baixo vence lento com RPS alto.
+		untied := map[string]SegmentStats{
+			"b1": {Count: 20, P95LatencyMS: 100, RecentRPS: 0.5},
+			"b2": {Count: 20, P95LatencyMS: 300, RecentRPS: 50},
+		}
+		out = OrderByFit([]nodes.Node{borda("b2"), borda("b1")}, nil, untied, DefaultCriteria, slo)
+		if len(out) != 2 || out[0].NodeID != "b1" {
+			t.Fatalf("p95 deveria dominar sobre RPS, obteve %v", nodeIDs(out))
+		}
+	})
+
+	t.Run("Segment short-circuits when throughput undeclared", func(t *testing.T) {
+		latOnly := &SLO{MaxLatencyMS: 5000}
+		rich := SegmentStats{Count: 20, P95LatencyMS: 100, RecentRPS: 1000}
+		if apt, ok := (ThroughputCriterion{}).Segment(latOnly, rich); ok || apt {
+			t.Fatalf("Segment sem declarado deveria ser (false,false), obteve (%v,%v)", apt, ok)
+		}
+		if apt, ok := (ThroughputCriterion{}).Segment(nil, rich); ok || apt {
+			t.Fatalf("Segment com slo nil deveria ser (false,false), obteve (%v,%v)", apt, ok)
+		}
+		// Com declarado, comportamento de antes, intacto.
+		decl := &SLO{MaxLatencyMS: 5000, MinThroughputRPS: 2}
+		if apt, ok := (ThroughputCriterion{}).Segment(decl, SegmentStats{Count: 0, RecentRPS: 9}); ok || apt {
+			t.Fatalf("Count==0 deveria ser (false,false), obteve (%v,%v)", apt, ok)
+		}
+		if apt, ok := (ThroughputCriterion{}).Segment(decl, SegmentStats{Count: 20, RecentRPS: 2.5}); !ok || !apt {
+			t.Fatalf("RPS acima do mínimo deveria ser (true,true), obteve (%v,%v)", apt, ok)
+		}
+		if apt, ok := (ThroughputCriterion{}).Segment(decl, SegmentStats{Count: 20, RecentRPS: 0.5}); !ok || apt {
+			t.Fatalf("RPS abaixo do mínimo deveria ser (false,true), obteve (%v,%v)", apt, ok)
+		}
+	})
+
+	t.Run("Fit unchanged with declared throughput", func(t *testing.T) {
+		if _, ok := (ThroughputCriterion{}).Fit(SegmentStats{Count: 0, RecentRPS: 9}); ok {
+			t.Fatalf("Fit com Count==0 deveria ser !ok")
+		}
+		score, ok := (ThroughputCriterion{}).Fit(SegmentStats{Count: 20, RecentRPS: 2.5})
+		if !ok || score != -2.5 {
+			t.Fatalf("Fit deveria ser -RPS com ok, obteve (%v,%v)", score, ok)
+		}
+	})
+
+	t.Run("HardLimit stays always-true", func(t *testing.T) {
+		tc := ThroughputCriterion{}
+		cfg := LimitsConfig{}
+		n := borda("b1")
+		for _, slo := range []*SLO{nil, {MaxLatencyMS: 5000}, {MaxLatencyMS: 5000, MinThroughputRPS: 2}} {
+			if !tc.HardLimit(n, slo, cfg) {
+				t.Fatalf("HardLimit da vazão deve ser sempre true (slo=%+v)", slo)
+			}
+		}
+	})
+}

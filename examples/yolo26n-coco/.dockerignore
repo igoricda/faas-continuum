@@ -1,0 +1,8 @@
+# Contexto mínimo do build: código + requirements + modelo + watchdog do arch.
+# (O Dockerfile.cpu e o Dockerfile partilham este contexto.)
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.log

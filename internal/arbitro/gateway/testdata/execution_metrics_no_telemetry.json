@@ -1,0 +1,1 @@
+{"cold_start":false,"function_time_ms":42,"instance_id":"inst-plain-1","phases":{"acquire_wait_ms":3,"function_ms":42,"readiness_ms":5},"queue_duration_ms":3,"readiness_duration_ms":5,"resource_profile":{"cpu_pct_avg":31.5,"cpu_pct_peak":58.0,"mem_peak_bytes":134217728,"sample_count":6},"response_time_ms":50}

@@ -1,0 +1,7 @@
+# Deps da imagem slim (sem `azure-functions`, sem o host .NET).
+# Mesmos pins de ../README.md — onnxruntime 1.30.0, OpenCV headless 4.10.0.84,
+# numpy 1.26.4. O trio e byte-identico ao requirements.txt do host Functions;
+# o que muda e a base (python:3.12-slim) e o shim (slim_app.py, stdlib).
+onnxruntime==1.30.0
+opencv-python-headless==4.10.0.84
+numpy==1.26.4

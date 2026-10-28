@@ -1,0 +1,32 @@
+bin/
+
+# Binaries produced in the working directory by `go build ./cmd/<name>` without -o.
+/agente
+/arbitro
+/simulador
+*.exe
+*.test
+*.out
+
+.DS_Store
+__pycache__/
+*.pyc
+
+# Function images ship the watchdog binary, which is built from this tree.
+/examples/*/watchdog-lite
+/examples/*/watchdog-lite-*
+
+# Local state and credentials.
+examples/result.json
+faas-continuum-credential.json
+faas-continuum-arbitro-credential.json
+faas-continuum-functions.json
+faas-continuum-nodes.json
+faas-continuum-cloud-fallback.json
+faas-continuum-history.json
+faas-continuum-node-tokens.json
+/history.json
+*.log
+
+# Windows ADS metadata sidecars.
+*:Zone.Identifier

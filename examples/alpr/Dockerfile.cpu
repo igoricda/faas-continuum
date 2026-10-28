@@ -1,0 +1,98 @@
+# Variante CPU do Dockerfile da função ALPR servidor — mesma função,
+# mesmo contrato ADR-0008 e mesma saída JSON do Dockerfile (GPU), mas
+# com torch +cpu em vez do torch CUDA: imagem muito menor e pull rápido
+# em servidor sem GPU. Para host COM GPU, usar o Dockerfile (tag :gpu).
+#
+# Build multi-stage (mesmo padrão de azure_functions/): o stage builder
+# instala tudo em /home/app/python e remove matplotlib/polars (+ deps
+# exclusivas deles), caches e pycache; o stage final copia SÓ os
+# pacotes. matplotlib/polars são Requires-Dist do ultralytics, mas todos
+# os imports deles no ultralytics são lazy (plotting, benchmarks,
+# callbacks, trainer) — o caminho quente (import + inferência .pt) não
+# os usa.
+#
+# Build (a partir da raiz do repositório):
+#   GOOS=linux GOARCH=amd64 go build -o examples/alpr/watchdog-lite ./cmd/watchdog-lite
+#   docker buildx build --platform linux/amd64 -t igoricda/alpr:cpu \
+#     -f examples/alpr/Dockerfile.cpu examples/alpr
+
+FROM --platform=linux/amd64 python:3.11-slim AS builder
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+WORKDIR /home/app/
+
+COPY function/requirements.txt function/requirements.txt
+# torch +cpu PRIMEIRO, a partir do índice CPU do PyTorch, para o
+# resolvedor não puxar os GBs de nvidia-* do PyPI — e em UM único comando
+# junto com a requirements.txt: com --target o resolvedor não enxerga o
+# diretório alvo como "já satisfeito", então um segundo install
+# reinstalaria torch CUDA por cima do +cpu.
+RUN uv pip install --no-cache --system --target=/home/app/python \
+      --extra-index-url https://download.pytorch.org/whl/cpu \
+      torch==2.14.0+cpu torchvision==0.29.0+cpu \
+      -r function/requirements.txt \
+ && rm -rf /home/app/python/matplotlib /home/app/python/mpl_toolkits /home/app/python/pylab.py \
+      /home/app/python/polars /home/app/python/_polars_runtime_32 \
+      /home/app/python/contourpy* /home/app/python/cycler* /home/app/python/fontTools \
+      /home/app/python/kiwisolver* \
+      /home/app/python/matplotlib-*.dist-info /home/app/python/polars-*.dist-info \
+      /home/app/python/polars_runtime_32-*.dist-info /home/app/python/contourpy-*.dist-info \
+      /home/app/python/cycler-*.dist-info /home/app/python/fonttools-*.dist-info \
+      /home/app/python/kiwisolver-*.dist-info \
+ && find /home/app/python -name "__pycache__" -type d -prune -exec rm -rf {} + \
+ && find /home/app/python -name "*.pyc" -delete \
+ && rm -rf /tmp/* /root/.cache
+
+FROM --platform=linux/amd64 python:3.11-slim
+
+# Pacotes de sistema exigidos pelo OpenCV (usado internamente pelo
+# ultralytics) — mesmo conjunto do template OpenFaaS original.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates libglib2.0-0 libgl1 \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd app && useradd -r -g app app
+
+WORKDIR /home/app/
+
+# O binário do watchdog-lite é compilado FORA do Docker (cross-compile
+# Go trivial, ver ADR-0001) e só copiado aqui.
+COPY watchdog-lite /usr/bin/watchdog-lite
+RUN chmod +x /usr/bin/watchdog-lite
+
+# Só os pacotes já instalados e limpos no builder — sem uv, sem caches,
+# sem matplotlib/polars, sem nvidia-*.
+COPY --from=builder /home/app/python /home/app/python
+
+COPY index.py .
+COPY function/ function/
+COPY best.pt .
+
+# IMPORTANTE: todo diretório em que o processo da função precisa
+# escrever depois de USER app precisa estar nesta lista (lição do
+# alpr: falhar aqui é silencioso até rodar como não-root).
+RUN mkdir -p /run/faas-continuum-socket /tmp/Ultralytics && \
+    chown -R app:app /home/app /run/faas-continuum-socket /tmp/Ultralytics
+
+USER app
+
+ENV PATH=$PATH:/home/app/python/bin/
+ENV PYTHONPATH=/home/app/python:/home/app
+ENV YOLO_CONFIG_DIR=/tmp/Ultralytics
+ENV YOLO_VERBOSE=False
+ENV MODEL_PATH=/home/app/best.pt
+ENV CONFIDENCE_THRESHOLD=0.25
+ENV IMAGE_SIZE=1280
+
+# Contrato da ADR-0008: FPROCESS / UPSTREAM_PORT / SOCKET_PATH — ver
+# Dockerfile (variante GPU) para o detalhamento.
+ENV FPROCESS="python3 index.py"
+ENV UPSTREAM_PORT=8081
+ENV SOCKET_PATH=/run/faas-continuum-socket/handle.sock
+
+# Mesmo cold import pesado (torch/ultralytics 30-60s a frio): 90s de
+# margem sem mascarar falha real de subida.
+ENV READY_TIMEOUT=90s
+
+CMD ["watchdog-lite"]

@@ -1,0 +1,155 @@
+// FaaS Continuum — Exemplo de configuração do agente (JSONC)
+// Copie para config.jsonc e ajuste para o deploy. Aceita comentários // e /* */.
+// Precedência: flags > env FAAS_* > config.jsonc > padrões embutidos.
+// Tabela completa: docs/config.md. Fonte dos padrões: internal/config/config.go:Defaults().
+{
+  // runtime: conexão com o containerd (ver Runtime em internal/config/config.go). Flags: -socket, -namespace, -socket-root
+  "runtime": {
+    // socket: socket gRPC do containerd (flag -socket, env FAAS_SOCKET). Padrão: "/run/containerd/containerd.sock"
+    "socket": "/run/containerd/containerd.sock",
+    // namespace: namespace do containerd que isola os objetos do framework (flag -namespace, env FAAS_NAMESPACE). Padrão: "faas-continuum"
+    "namespace": "faas-continuum",
+    // socket_root: diretório no host para os sockets Unix por instância entre agente e watchdog-lite (flag -socket-root, env FAAS_SOCKET_ROOT). Padrão: "/run/faas-continuum/sockets"
+    "socket_root": "/run/faas-continuum/sockets"
+  },
+
+  // registry: persistência das definições de função (ver NewPersistentRegistry em internal/registry/persistence.go). Flag: -registry
+  "registry": {
+    // path: JSON file persisting the function registry (env FAAS_REGISTRY). Default: "./faas-continuum-functions.json"
+    "path": "./faas-continuum-functions.json",
+    // allowed_registries: lista de hosts de registry permitidos para image_ref (env FAAS_REGISTRY_ALLOWED_REGISTRIES).
+    // Default: [] (vazio = permite qualquer registry). Exemplo: ["docker.io", "registry.example.com", "ghcr.io"].
+    // Quando preenchido, Register/Update rejeitam image_ref cujo registry host não estiver na lista (400 INVALID_IMAGE_REF).
+    "allowed_registries": []
+  },
+
+  // telemetry: coleta e envio (ver Collector/Reporter em internal/telemetry). Flags: -cgroup-root, -report-interval
+  "telemetry": {
+    // enabled: liga/desliga global da coleta de telemetria (env FAAS_TELEMETRY_ENABLED). Padrão: true
+    "enabled": true,
+    // cgroup_root: raiz do cgroups v2 para PSI + cpu/memória (flag -cgroup-root, env FAAS_CGROUP_ROOT). Padrão: "" (= detecção automática, em geral /sys/fs/cgroup); vazio cai em /proc/stat + /proc/meminfo sem cgroups v2
+    "cgroup_root": "",
+    // proc_stat_path: caminho do fallback de CPU (env FAAS_TELEMETRY_PROC_STAT_PATH). Padrão: "/proc/stat"
+    "proc_stat_path": "/proc/stat",
+    // meminfo_path: caminho do fallback de memória (env FAAS_TELEMETRY_MEMINFO_PATH). Padrão: "/proc/meminfo"
+    "meminfo_path": "/proc/meminfo",
+    // powercap_root: raiz do Power Capping Framework para contadores RAPL de energia (env FAAS_TELEMETRY_POWERCAP_ROOT). Padrão: "/sys/class/powercap"
+    "powercap_root": "/sys/class/powercap",
+    // power_supply_root: raiz do subsistema power_supply para bateria/potência instantânea (env FAAS_TELEMETRY_POWER_SUPPLY_ROOT). Padrão: "/sys/class/power_supply"
+    "power_supply_root": "/sys/class/power_supply",
+    // report_interval: período do envio autônomo ao monitor (flag -report-interval, env FAAS_REPORT_INTERVAL). Padrão: "10s" — só usado com monitor_url setado
+    "report_interval": "10s",
+    // invocation_sample_interval: período de amostragem do perfil de recursos por invocação via métricas do containerd (env FAAS_TELEMETRY_INVOCATION_SAMPLE_INTERVAL). Padrão: "200ms"
+    "invocation_sample_interval": "200ms"
+  },
+
+  // nodeapi: API HTTP do nó (ver Server em internal/nodeapi/server.go). Flags: -listen, -host, -node-id, -monitor-url, -default-timeout, -reconcile-timeout, -late-queue-cap, -late-cap-ms
+  "nodeapi": {
+    // listen: endereço onde a API do nó escuta (flag -listen, env FAAS_LISTEN). Padrão: ":8080"
+    "listen": ":8080",
+    // host: host público usado para compor host/function/nome (flag -host, env FAAS_HOST). Padrão: "" (= herda listen)
+    "host": "",
+    // node_id: identificador reportado na telemetria (flag -node-id, env FAAS_NODE_ID). Padrão: "" (= hostname)
+    "node_id": "",
+    // monitor_url: endpoint do monitor do Árbitro para envio periódico (flag -monitor-url, env FAAS_MONITOR_URL). Padrão: "" (desliga o periódico; piggyback continua ativo)
+    "monitor_url": "",
+    // default_timeout: timeout de invocação quando função e SLO omitem (flag -default-timeout, env FAAS_DEFAULT_TIMEOUT). Padrão: "90s" (perfil experimento TCC: cobre cold import YOLO 30-60s; verdade única = código 90s — ver regra de coordenação com READY_TIMEOUT em docs/config.md)
+    "default_timeout": "90s",
+    // reconcile_timeout: prazo da reconciliação de startup dos contêineres sobreviventes (flag -reconcile-timeout, env FAAS_RECONCILE_TIMEOUT). Padrão: "60s"
+    "reconcile_timeout": "60s",
+    // max_management_body_bytes: teto do corpo das rotas de gerenciamento POST/PUT (env FAAS_NODEAPI_MAX_MANAGEMENT_BODY_BYTES). Padrão: 65536
+    "max_management_body_bytes": 65536,
+    // max_invoke_body_bytes: teto do corpo da invocação (env FAAS_NODEAPI_MAX_INVOKE_BODY_BYTES). Padrão: 8388608 (8 MiB) — unificado com o limite do gateway do Árbitro
+    "max_invoke_body_bytes": 8388608,
+    // max_function_output_bytes: teto da saída de função bufferizada no invoke (env FAAS_NODEAPI_MAX_FUNCTION_OUTPUT_BYTES). Padrão: 8388608 (8 MiB)
+    "max_function_output_bytes": 8388608,
+    // read_header_timeout: ReadHeaderTimeout do HTTP (env FAAS_NODEAPI_READ_HEADER_TIMEOUT). Padrão: "10s"
+    "read_header_timeout": "10s",
+    // idle_timeout: IdleTimeout do HTTP para keep-alive (env FAAS_NODEAPI_IDLE_TIMEOUT). Padrão: "120s"
+    "idle_timeout": "120s",
+    // late_queue_cap: teto da fila do late-report sender; além do teto descarta + conta late_dropped_total (flag -late-queue-cap, env FAAS_NODEAPI_LATE_QUEUE_CAP). Padrão: 1024
+    "late_queue_cap": 1024,
+    // late_cap_ms: teto da execução desanexada opted-in em ms, lateCap=min(nodeTimeout, late_cap_ms) (flag -late-cap-ms, env FAAS_NODEAPI_LATE_CAP_MS). Padrão: 90000 (= 90s; verdade única = código — ver regra de coordenação com READY_TIMEOUT em docs/config.md)
+    "late_cap_ms": 90000
+  },
+
+  // scaling: ajustes de autoscaling (ver Manager em internal/pool/pool.go)
+  "scaling": {
+    // default_scale_down_timeout: ociosidade antes de descer até min_instances quando a função omite idle_timeout (flag -default-scale-down-timeout, env FAAS_DEFAULT_SCALE_DOWN_TIMEOUT). Padrão: "15m"
+    "default_scale_down_timeout": "15m"
+  },
+
+  // arbitro: ajustes do gateway central (ver Server/Gateway em internal/arbitro/server e gateway). Flags: -url, -listen, -credential, -nodes, -stale-after, -history, -history-cap, -history-sync, -invocation-log, -selflearning-min-samples, -selflearning-throughput-window, -max-race-fanout
+  "arbitro": {
+    // url: endpoint da API do Árbitro (flag -arbitro-url, env FAAS_ARBITRO_URL). Padrão: ""
+    "url": "",
+    // layer: camada de rede (flag -layer, env FAAS_LAYER). Padrão: "borda"
+    "layer": "borda",
+    // listen: endereço onde o Árbitro escuta (flag -listen, env FAAS_ARBITRO_LISTEN). Padrão: ":8090"
+    "listen": ":8090",
+    // nodes: caminho do registro de nós (flag -nodes, env FAAS_ARBITRO_NODES_PATH). Padrão: "./faas-continuum-nodes.json"
+    "nodes_path": "./faas-continuum-nodes.json",
+    // credential_path: caminho do arquivo de credencial (flag -credential, env FAAS_ARBITRO_CREDENTIAL). Padrão: "./faas-continuum-arbitro-credential.json"
+    "credential_path": "./faas-continuum-arbitro-credential.json",
+    // node_tokens_path: caminho do arquivo de tokens por nó (flag -node-tokens, env FAAS_ARBITRO_NODE_TOKENS_PATH). Padrão: "./faas-continuum-node-tokens.json"
+    "node_tokens_path": "./faas-continuum-node-tokens.json",
+    // stale_after: tempo sem last_seen até o nó ficar indisponível (flag -stale-after, env FAAS_STALE_AFTER). Padrão: "90s"
+    "stale_after": "90s",
+    // history_path: caminho do arquivo de histórico (flag -history, env FAAS_ARBITRO_HISTORY_PATH). Padrão: "./faas-continuum-history.json"
+    "history_path": "./faas-continuum-history.json",
+    // "arbitro.history_sync": "batched", — modo de persistência do histórico: batched (ticker 500ms+coalesce) ou strict (fsync por Append)
+    "history_sync": "batched",
+    // selector: seletor em produção (flag -selector, envs ARBITRO_SELECTOR/FAAS_ARBITRO_SELECTOR). "risk" (RiskSelector canônico, padrão) ou "hl" (QueueSelector puro = baseline hard-limits, sem aprendizado; o v1 continua aposentado — ADR-0012). Qualquer outro valor aborta o startup
+    "selector": "risk",
+    // history_cap: capacidade por segmento de entradas históricas (flag -history-cap, env FAAS_ARBITRO_HISTORY_CAP). Padrão: 1000
+    "history_cap": 1000,
+    // history_retention: janela de retenção por idade do histórico (flag -history-retention, envs ARBITRO_HISTORY_RETENTION/FAAS_ARBITRO_HISTORY_RETENTION, ADR-0007 D38). Padrão: "1h"; 0 desliga o corte; >0 precisa cobrir throughput_window (senão aborta o startup). O invocation log segue com o registro completo
+    "history_retention": "1h",
+    // invocation_log_path: log append-only de invocações (JSONL, uma Entry por linha, sem teto) para análise; vazio desliga (flag -invocation-log, env FAAS_ARBITRO_INVOCATION_LOG_PATH). Padrão: ""
+    "invocation_log_path": "",
+    // min_samples: amostras mínimas do histórico por segmento (flag -selflearning-min-samples, env FAAS_ARBITRO_MIN_SAMPLES). Padrão: 20. Consumida pelo sumário do histórico no GET /nodes — o nome da flag é histórico (a transição self-learning era do v1, aposentado no ADR-0012)
+    "min_samples": 20,
+    // throughput_window: janela do histórico para vazão/custo (flag -selflearning-throughput-window, env FAAS_ARBITRO_THROUGHPUT_WINDOW). Padrão: "60s" (código: internal/config/config.go Defaults + flag cmd/arbitro/main.go); recomendado "10m" no cenário priming→bateria para cobrir o gap (ver docs/priming-historico-lpr-ocr.md §4.2). Alimenta o RiskSelector (ExpectedCost) e o history_summary do GET /nodes
+    "throughput_window": "10m",
+    // max_race_fanout: teto de tentativas de nó por invoke no gateway (flag -max-race-fanout, env FAAS_ARBITRO_MAX_RACE_FANOUT). Padrão: 3
+    "max_race_fanout": 3,
+    // max_cpu_pct: limite de CPU em % para marcar nó como sobrecarregado (flag -max-cpu-pct, env FAAS_ARBITRO_MAX_CPU_PCT). Padrão: 85 (AUD-06: <=0 aborta o startup)
+    "max_cpu_pct": 85,
+    // max_mem_pct: limite de memória em % para marcar nó como sobrecarregado (flag -max-mem-pct, env FAAS_ARBITRO_MAX_MEM_PCT). Padrão: 90 (AUD-06: <=0 aborta o startup)
+    "max_mem_pct": 90,
+    // max_psi_avg10: limite de pressão PSI avg10 em % — some CPU/mem + full mem (flag -max-psi-avg10, env FAAS_ARBITRO_MAX_PSI_AVG10). Padrão: 25 (AUD-06/AUD-18: <=0 aborta o startup)
+    "max_psi_avg10": 25,
+    // node_limits: override dos hard-limits POR NÓ (chave = node_id do registro). Entrada PARCIAL: campo 0 ou ausente HEREDA o global acima (max_cpu_pct/max_mem_pct/max_psi_avg10). Só o Árbitro consome; sem flag/env (mapa não expressa em escalar). Atinge apenas o estágio de hard-limits (crivo de sobrecarga e status sobrecarregado do GET /nodes) — self-learning não é afetado. Negativo/NaN/Inf/node_id vazio abortam o startup; node_id sem nó registrado só gera aviso. Padrão: omitido (todos os nós no global). Exemplo: {"borda-01": {"max_cpu_pct": 60}, "nevoa-01": {"max_cpu_pct": 95, "max_mem_pct": 70, "max_psi_avg10": 10}}
+    "node_limits": {},
+    // invoke_timeout: timeout padrão de invocação no gateway (flag -invoke-timeout, env FAAS_ARBITRO_INVOKE_TIMEOUT). Padrão: "90s" (AUD-06: <=0 aborta o startup)
+    "invoke_timeout": "90s",
+    // cloud_fallback_path: persistência da configuração de fallback de nuvem (flag -cloud-fallback, env FAAS_ARBITRO_CLOUD_FALLBACK). Padrão: "./faas-continuum-cloud-fallback.json"
+    "cloud_fallback_path": "./faas-continuum-cloud-fallback.json",
+    // function_categories: mapa explícito variante→categoria em JSON enviado como function_categories no POST /nodes (flag -function-categories, env FAAS_FUNCTION_CATEGORIES). Padrão: omitido (sem auto-derivação do registry local). Exemplo: {"alpr-yolo-tiny": "alpr-yolo"}
+    "function_categories": {},
+    // risk_half_life: meia-vida do decaimento temporal do RiskSelector — seletor canônico desde 2026-10-09 (ADR-0012: o v1 SelfLearningSelector foi aposentado e removido; não existe mais selection_algo). Flag -risk-halflife, envs ARBITRO_RISK_HALFLIFE/FAAS_ARBITRO_RISK_HALFLIFE. Padrão: "10m"
+    "risk_half_life": "10m",
+    // risk_epsilon: ε_risk do ACI do RiskSelector (flag -risk-epsilon, envs ARBITRO_RISK_EPSILON/FAAS_ARBITRO_RISK_EPSILON). Padrão: 0.05
+    "risk_epsilon": 0.05,
+    // risk_aci_gamma: γ do ACI do RiskSelector (flag -risk-aci-gamma, envs ARBITRO_RISK_ACI_GAMMA/FAAS_ARBITRO_RISK_ACI_GAMMA). Padrão: 0.01
+    "risk_aci_gamma": 0.01,
+    // risk_nmin: nmin do RiskSelector — probation abaixo disso (flag -risk-nmin, envs ARBITRO_RISK_NMIN/FAAS_ARBITRO_RISK_NMIN). Padrão: 3
+    "risk_nmin": 3,
+    // risk_explore: probabilidade de exploração à frente da fila do RiskSelector (flag -risk-explore, envs ARBITRO_RISK_EXPLORE/FAAS_ARBITRO_RISK_EXPLORE). Padrão: 0.05
+    "risk_explore": 0.05,
+    // risk_stretch: stretch do T_eff sem SLO do RiskSelector (flag -risk-stretch, envs ARBITRO_RISK_STRETCH/FAAS_ARBITRO_RISK_STRETCH). Padrão: 2.0
+    "risk_stretch": 2.0,
+    // risk_stretch_slo: stretch do T_eff com SLO do RiskSelector; 0 = desligado (flag -risk-stretch-slo, envs ARBITRO_RISK_STRETCH_SLO/FAAS_ARBITRO_RISK_STRETCH_SLO). Padrão: 0
+    "risk_stretch_slo": 0,
+    // risk_band: tolerância de empate da banda do RiskSelector (flag -risk-band, envs ARBITRO_RISK_BAND/FAAS_ARBITRO_RISK_BAND). Padrão: 0.10
+    "risk_band": 0.10,
+    // risk_queue_allowance: teto estático de fila do RiskSelector (flag -risk-queue-allowance, envs ARBITRO_RISK_QUEUE_ALLOWANCE/FAAS_ARBITRO_RISK_QUEUE_ALLOWANCE). Padrão: 1.0
+    "risk_queue_allowance": 1.0,
+    // risk_default_servers: servidores presumidos pelo RiskSelector sem max_instances (flag -risk-default-servers, envs ARBITRO_RISK_DEFAULT_SERVERS/FAAS_ARBITRO_RISK_DEFAULT_SERVERS). Padrão: 1
+    "risk_default_servers": 1,
+    // risk_min_success: P_succ mínima do RiskSelector (flag -risk-min-success, envs ARBITRO_RISK_MIN_SUCCESS/FAAS_ARBITRO_RISK_MIN_SUCCESS). Padrão: 0.5
+    "risk_min_success": 0.5,
+    // risk_priors: arquivo JSON de priors do RiskSelector (flag -risk-priors, envs ARBITRO_RISK_PRIORS/FAAS_ARBITRO_RISK_PRIORS). Padrão: "" (sem priors)
+    "risk_priors": ""
+  }
+}
