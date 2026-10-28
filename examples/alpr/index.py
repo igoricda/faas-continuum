@@ -1,12 +1,13 @@
-"""Processo HTTP mínimo esperado pelo watchdog-lite (ADR-0008): escuta em
-127.0.0.1:$PORT e chama handle() a cada requisição recebida. O
-watchdog-lite fala com este processo por loopback interno ao contêiner —
-nenhuma configuração de rede além disso é necessária.
+"""Minimal HTTP process expected by the watchdog: it listens on
+127.0.0.1:$PORT and calls handle() on every request received. The watchdog
+talks to this process over the loopback interface of the container, so no
+other network configuration is needed.
 
-Bind-first + lazy-load: o socket é aberto ANTES do import pesado de
-function.handler (que carrega o modelo YOLO uma única vez, 30-60s a frio)
-— esse import roda numa thread de fundo e sinaliza _ready; até lá GET
-/_/ready e POST / respondem 503."""
+Bind first and lazy load: the socket is opened BEFORE the heavy import of
+function.handler, which loads the detection model once, taking thirty to
+sixty seconds on a cold instance. That import runs in a background thread and
+signals the ready event; until then the readiness route and the post route
+answer with a rejection."""
 import json
 import os
 import threading
@@ -66,5 +67,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=_load, daemon=True).start()
     port = int(os.environ.get("PORT", "8081"))
-    print(f"index.py: escutando em 127.0.0.1:{port}", flush=True)
+    print(f"index.py: listening on 127.0.0.1:{port}", flush=True)
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()

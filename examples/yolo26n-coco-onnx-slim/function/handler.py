@@ -1,40 +1,43 @@
-"""Função de detecção de objetos (YOLO26n COCO) no Azure Functions, backend
-ONNX Runtime direto, contra o contrato da ADR-0008.
+"""Object detection function, with the YOLO26n model trained on COCO and the
+direct ONNX Runtime backend.
 
-Port 1:1 do pós-processamento de
-[`examples/yolo26n-coco-ncnn-slim`](../../examples/yolo26n-coco-ncnn-slim)
-— o exemplo slim validado (paridade com o par `.pt` em 36/36 imagens,
-mesma contagem e classes, max Δconf 0,0048) — trocando **apenas** o
-forward: `ncnn.Net` entra `onnxruntime.InferenceSession`. Mesma entrada,
-mesma saída JSON, mesmos pesos, mesmos knobs.
+It is a one to one port of the post-processing of the slim ncnn example,
+which is the validated variant, with a parity against the checkpoint over
+thirty-six images, with the same count and the same classes and a maximum
+difference of confidence of 0.0048. Only the forward pass changes: the
+network of the ncnn runtime gives way to the session of the ONNX runtime.
+The input, the JSON output, the weights and the knobs are the same.
 
-Os dois grafos são o mesmo head one2many do YOLO26n: o `out0` do export
-ncnn e o `output0` do export ONNX saem como **(84, 8400) = [cx, cy, w, h,
-80 scores]** em px-640, com anchors/strides/sigmoid já no grafo. Conferido
-neste host com `bus.jpg`: mesmo shape, mesmo top-5 (classe, conf e
-xywh idênticos), max |Δ| 0,0059 no tensor inteiro (média 3e-6). O NMS
-continua em numpy, então `IOU_THRESHOLD`/`MAX_DET`/`CONFIDENCE_THRESHOLD`
-funcionam igual aos do exemplo slim.
+The two graphs are the same one to many head of the model: the output of
+the ncnn export and the output of the ONNX export come out as eighty-four
+rows by eight thousand four hundred columns, with the center, the size and
+the scores of the eighty classes, in pixels of the resized image, with the
+anchors, the strides and the sigmoid already in the graph. It was checked on
+an x86 host with a sample image: the same shape, the same five best
+detections, with an identical class, confidence and box, and a maximum
+absolute difference of 0.0059 over the whole tensor, with a mean of three
+parts per million. The suppression stays in numpy, so the intersection over
+union, the maximum number of detections and the confidence threshold behave
+as in the slim example.
 
-Por que ONNX e não torch: no ACA (x86, Consumption) o cold de ~42 s era
-dominado pelo pull da imagem de ~3 GB, cujo grosso é torch+CUDA+ultralytics.
-Sem eles, a imagem cai para ~1 GB de site-packages e o import para ~1 s
-(mesmo motivo do `../alpr`; a regra x86 (ACA) = onnxruntime está em
-`../README.md`).
+The reason to use ONNX instead of torch is that on an x86 host the cold
+start of about forty-two seconds was dominated by the pull of an image of
+about three gigabytes, whose bulk is torch, CUDA and ultralytics. Without
+them the image falls to about one gigabyte of packages and the import falls
+to about one second, the same reason that drives the license plate example.
 
-Contrato de entrada/saída (input/result de InvocationRequest/
-ExecutionResponse, modelo-dados-schemas.md, Seções 5 e 8) — idêntico ao
-dos dois exemplos do par:
+Input and output contract, identical to the one of the two examples of the
+pair:
 
-    entrada:  {"image_base64": "<jpg ou png em base64>"}
-    saída:    {"status": "success", "image_base64": "<jpg anotado>",
-               "image_format": "jpeg", "image_size": {...},
-               "detections": [...], "inference_ms": 12.3}
-           ou {"status": "error", "message": "..."}
+    input:   {"image_base64": "<jpg or png in base64>"}
+    output:  {"status": "success", "image_base64": "<annotated jpg>",
+              "image_format": "jpeg", "image_size": {...},
+              "detections": [...], "inference_ms": 12.3}
+             or {"status": "error", "message": "..."}
 
-A sessão ORT é criada uma única vez, no import do módulo — é isso que o
-warm reuse do worker do Azure Functions explora (o modelo não recarrega
-por requisição; só por réplica fria).
+The session of the runtime is created once, at the import of the module,
+which is what the warm reuse of the worker process exploits: the model is
+not reloaded on every request and only happens on a cold replica.
 """
 import base64
 import binascii
@@ -47,36 +50,43 @@ import numpy as np
 import onnxruntime as ort
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./yolo26n.onnx")
-# Sem ultralytics no runtime para ler os nomes do metadata do export, eles
-# vêm de um arquivo de texto puro gerado do yolo26n.pt — o mesmo
-# `coco80.names` do par slim (ver "Preparar" no README).
+# Without the ultralytics runtime there is no metadata file of the export to
+# read the class names from, so they come from a plain text file generated
+# from the checkpoint, the same file used by the slim counterpart.
 NAMES_PATH = os.environ.get("NAMES_PATH", "./coco80.names")
-# Defaults do ultralytics (DEFAULT_CFG): conf 0.25, iou 0.7, max_det 300.
+# The defaults of the ultralytics runtime: a confidence of 0.25, an
+# intersection over union of 0.7 and at most three hundred detections.
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.7"))
 MAX_DET = int(os.environ.get("MAX_DET", "300"))
-# imgsz=640 é o shape estático congelado no grafo exportado — precisa
-# coincidir com o do export.
+# The image size of 640 is the static shape frozen in the exported graph, so
+# it has to match the one of the export.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "640"))
-# ANNOTATE=0 devolve só as detecções (sem base64): resposta ~590 B em vez
-# de ~313 KB, para quem precisa do JSON leve ou desenha no próprio front.
+# With the annotation disabled the answer carries only the detections and no
+# encoded image, which is about 590 bytes instead of about 313 kilobytes,
+# which suits clients that need a light JSON or that draw the image
+# themselves.
 ANNOTATE = os.environ.get("ANNOTATE", "1").lower() not in ("0", "false", "no")
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "85"))
-# ANNOTATE_MAX_SIDE=0 mantém a resolução de entrada. Com valor > 0, a
-# imagem anotada é reduzida (e as coordenadas acompanham) para caber no
-# teto de resposta do nó.
+# With a maximum side of zero the resolution of the input is kept. With a
+# positive value the annotated image is reduced, and the coordinates follow
+# it, so that it fits the response ceiling of the node.
 ANNOTATE_MAX_SIDE = int(os.environ.get("ANNOTATE_MAX_SIDE", "0"))
-# ORT_THREADS=0 deixa o default do onnxruntime; >0 fixa intra/inter op.
-# Mesmo nome de knob do ../alpr e ../ocr (o par slim usa N_THREADS porque
-# no ncnn a opção é net.opt.num_threads).
+# Zero leaves the default of the ONNX runtime and a positive value pins the
+# number of threads of the intra and inter operation parallelism. It is the
+# same knob name used by the license plate and the text recognition
+# examples, since the slim ncnn counterpart uses another name because the
+# ncnn runtime exposes the option on the network object.
 ORT_THREADS = int(os.environ.get("ORT_THREADS", "0"))
-# Restos do non_max_suppression do ultralytics (utils/nms.py): o corte
-# antes do NMS e o offset que impede supressão entre classes diferentes.
+# The two constants of the suppression of the ultralytics runtime: the cut
+# applied before the suppression and the offset that prevents the
+# suppression between different classes.
 MAX_NMS = int(os.environ.get("MAX_NMS", "30000"))
 MAX_WH = np.float32(7680.0)
 
-# Paleta do ultralytics 8.4.153 (utils/plotting.py::Colors.hexs) — a
-# mesma do Annotator, para a anotação ter a cara do `yolo predict`.
+# The palette of the ultralytics runtime, the same one used by its
+# annotator, so that the annotation looks like the output of the prediction
+# command.
 _PALETTE = (
     "042AFF", "0BDBEB", "F3F3F3", "00DFB7", "111F68",
     "FF6FDD", "FF444F", "CCED00", "00F344", "BD00FF",
@@ -90,8 +100,8 @@ def _load_sess(path):
     if ORT_THREADS > 0:
         opts.intra_op_num_threads = ORT_THREADS
         opts.inter_op_num_threads = ORT_THREADS
-    # CPUExecutionProvider: o ACA (kind=functionapp, Consumption) não tem
-    # GPU, e é o backend que o ../alpr e o ../ocr já usam.
+    # The CPU provider: the x86 target has no GPU, and it is the backend that
+    # the license plate and the text recognition examples already use.
     return ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
 
 
@@ -99,13 +109,13 @@ def _load_names(path):
     with open(path, encoding="utf-8") as f:
         names = [line.strip() for line in f if line.strip()]
     if not names:
-        raise ValueError(f"lista de classes vazia em {path}")
+        raise ValueError(f"the list of classes in {path} is empty")
     return names
 
 
-# Ambos carregados uma vez só, no import — todo o ganho do warm reuse do
-# worker (RF-01, ADR-0005) depende disso: o cold de carregar o modelo não
-# pode acontecer a cada invocação.
+# Both are loaded only once, at the import, which is what the warm reuse of
+# the worker process depends on: the cold start of loading the model cannot
+# happen on every invocation.
 _sess = _load_sess(MODEL_PATH)
 _IN_NAME = _sess.get_inputs()[0].name
 _OUT_NAME = _sess.get_outputs()[0].name
@@ -113,8 +123,9 @@ NAMES = _load_names(NAMES_PATH)
 
 
 def _letterbox(bgr, new_shape=640, color=(114, 114, 114)):
-    """Redimensiona + padding como o LetterBox do ultralytics (inclui o
-    arredondamento ±0.1 das bordas). Devolve (imagem, razão, (pad_x, pad_y))."""
+    """Resizes and pads the image like the letterbox of the ultralytics
+    runtime, including the rounding of the borders by one tenth. It returns the
+    image, the ratio and the padding on each axis."""
     h, w = bgr.shape[:2]
     r = min(new_shape / h, new_shape / w)
     nw, nh = round(w * r), round(h * r)
@@ -128,11 +139,12 @@ def _letterbox(bgr, new_shape=640, color=(114, 114, 114)):
 
 
 def _nms(boxes, scores, iou_thres):
-    """NMS gulosa, com supressão classe-a-classe já feita pelo offset do
-    chamador — espelha torchvision.ops.nms, que é o que o
-    non_max_suppression do ultralytics usa quando o torchvision está
-    importado (utils/nms.py:160): ordena por confiança e suprime o que
-    tiver IoU > limiar. `boxes` já vem com o offset de classe somado."""
+    """The greedy suppression, with the per-class suppression already done by
+    the offset applied by the caller. It mirrors the operator of the
+    torchvision library, which is what the ultralytics runtime uses when the
+    torchvision library is available: it orders by confidence and suppresses
+    every box whose intersection over union is above the threshold. The
+    boxes already carry the class offset."""
     order = np.argsort(-scores, kind="stable")
     b = boxes[order]
     x1, y1, x2, y2 = b[:, 0].copy(), b[:, 1].copy(), b[:, 2].copy(), b[:, 3].copy()
@@ -152,28 +164,31 @@ def _nms(boxes, scores, iou_thres):
 
 
 def _predict(bgr):
-    """Inferência completa sobre imagem BGR; devolve a lista de detecções
-    [(class_id, conf, (x1, y1, x2, y2)), ...] em coordenadas da imagem
-    original."""
+    """The complete inference over a BGR image. It returns the list of
+    detections, with the class, the confidence and the corners of the box, in
+    the coordinates of the original image."""
     oh, ow = bgr.shape[:2]
     lb, _gain, (pad_x, pad_y) = _letterbox(bgr, IMAGE_SIZE)
-    # O ORT espera RGB (o letterbox devolve BGR) normalizado em 0..1, NCHW.
+    # The ONNX runtime expects RGB, since the letterbox returns BGR,
+    # normalized in the range from zero to one, with the batch first.
     nchw = np.ascontiguousarray(
         (lb[:, :, ::-1].astype(np.float32) / np.float32(255.0)).transpose(2, 0, 1)
     )[None]
 
-    # output0 (1,84,8400) = [cx, cy, w, h, 80 scores] já em px-640, com o
-    # decode embutido no grafo exportado (mesmo layout do out0 ncnn).
+    # The output holds one batch of eighty-four rows by eight thousand four
+    # hundred columns, with the center, the size and the scores already in
+    # pixels of the resized image, with the decoding built into the exported
+    # graph, in the same layout as the ncnn output.
     pred = _sess.run([_OUT_NAME], {_IN_NAME: nchw})[0][0].T  # (8400, 4+nc)
 
     cls = pred[:, 4:]
     if cls.shape[1] != len(NAMES):
         raise ValueError(
-            f"modelo tem {cls.shape[1]} classes, {NAMES_PATH} tem {len(NAMES)} "
-            "(regere o arquivo a partir do .pt — ver README)"
+            f"the model has {cls.shape[1]} classes and {NAMES_PATH} has "
+            f"{len(NAMES)}, regenerate the file from the checkpoint"
         )
-    # Melhor classe por caixa: o non_max_suppression roda em single_label
-    # no predict (multi_label=False), então uma caixa = uma classe.
+    # The best class per box: the suppression of the runtime runs with a
+    # single label on the prediction, so one box carries one class.
     cls_id = np.argmax(cls, axis=1)
     conf = cls[np.arange(cls.shape[0]), cls_id]
     keep = conf > np.float32(CONFIDENCE_THRESHOLD)
@@ -181,23 +196,24 @@ def _predict(bgr):
         return []
 
     pred, cls_id, conf = pred[keep], cls_id[keep], conf[keep]
-    # xywh -> xyxy (o NMS do ultralytics converte antes de suprimir).
+    # The conversion from the center and the size to the corners, which the
+    # runtime does before the suppression.
     cx, cy, bw, bh = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
     boxes = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
     if boxes.shape[0] > MAX_NMS:
         top = np.argsort(-conf, kind="stable")[:MAX_NMS]
         boxes, cls_id, conf = boxes[top], cls_id[top], conf[top]
-    # Offset de classe (max_wh=7680): caixas de classes diferentes nunca
-    # se suprimem entre si (agnostic=False).
+    # The class offset: boxes of different classes never suppress each other.
     idx = _nms(boxes + cls_id[:, None].astype(np.float32) * MAX_WH,
                conf, np.float32(IOU_THRESHOLD))[:MAX_DET]
     boxes, cls_id, conf = boxes[idx], cls_id[idx], conf[idx]
 
-    # scale_boxes(padding=True, xywh=False) + clip_boxes: o pad sai de
-    # todos os cantos, tudo divide pelo gain, e o resultado é preso na
-    # imagem original. `xy` é uma cópia (o slice com lista de índices é
-    # fancy-index), então o out= do np.clip escreve nela e volta para
-    # `boxes` — clip direto em boxes[:, [0, 2]] seria descartado.
+    # The rescaling and the clip of the boxes: the padding is removed from
+    # every corner, every length is divided by the ratio, and the result is
+    # clamped to the original image. The temporary array is a copy, since the
+    # slice with an index list is a fancy index, so the clip writes into the
+    # copy and the result is assigned back to the boxes; a clip applied
+    # directly to the columns of the boxes would be discarded.
     gain = min(IMAGE_SIZE / oh, IMAGE_SIZE / ow)
     xy = (boxes[:, [0, 2]] - pad_x) / gain
     np.clip(xy, 0.0, float(ow), out=xy)
@@ -210,17 +226,18 @@ def _predict(bgr):
 
 
 def _bgr(cls_id):
-    """Cor da classe como tupla BGR (o cv2 desenha em BGR)."""
+    """The color of the class as a BGR tuple, since the image library draws
+    in BGR."""
     h = _PALETTE[int(cls_id) % len(_PALETTE)]
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     return b, g, r
 
 
 def _annotate(bgr, dets):
-    """Desenha as caixas e o rótulo (classe + confiança) em cima de
-    `bgr` (modifica in-place). Espelha o Annotator do ultralytics: mesma
-    paleta, mesma espessura de linha (lw = max(round(sum(shape)/2*0.003),
-    2)) e mesmo texto branco sobre a cor da classe."""
+    """Draws the boxes and the label, with the class and the confidence, on
+    top of the image, which it modifies in place. It mirrors the annotator of
+    the ultralytics runtime, with the same palette, the same line thickness
+    and the same white text over the color of the class."""
     lw = max(round(sum(bgr.shape) / 2 * 0.003), 2)
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(lw / 3.0, 0.5)
@@ -239,8 +256,9 @@ def _annotate(bgr, dets):
 
 
 def _resize_for_output(bgr, dets):
-    """Aplica ANNOTATE_MAX_SIDE (0 = mantém). Devolve (imagem, detecções)
-    com as coordenadas no sistema da imagem devolvida."""
+    """Applies the maximum side of the annotation, where zero keeps the
+    original size. It returns the image and the detections with the
+    coordinates in the coordinate system of the returned image."""
     if ANNOTATE_MAX_SIDE <= 0:
         return bgr, dets
     h, w = bgr.shape[:2]
@@ -256,7 +274,7 @@ def _resize_for_output(bgr, dets):
 def _encode_jpeg(bgr):
     ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     if not ok:
-        raise RuntimeError("cv2.imencode falhou")
+        raise RuntimeError("the image could not be encoded")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
@@ -277,19 +295,20 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
-    # Mesmo decode dos dois exemplos: cv2 IMREAD_COLOR devolve BGR já
-    # corrigido pela orientação do EXIF.
+    # The two examples decode the image the same way: the color mode of the
+    # image library returns BGR already corrected by the orientation of the
+    # EXIF header.
     img = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        return json.dumps({"status": "error", "message": "imagem inválida ou corrompida (não decodificável)"})
+        return json.dumps({"status": "error", "message": "invalid or corrupted image, it cannot be decoded"})
 
     t0 = time.perf_counter()
     try:
         dets = _predict(img)
-    except Exception as exc:  # inferência pode falhar por imagem degenerada etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a degenerate image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
     inference_ms = (time.perf_counter() - t0) * 1000.0
 
     out = {"status": "success"}
@@ -302,7 +321,7 @@ def handle(req: str) -> str:
             out["image_format"] = "jpeg"
             out["image_size"] = {"width": int(canvas.shape[1]), "height": int(canvas.shape[0])}
         except Exception as exc:
-            return json.dumps({"status": "error", "message": f"falha na anotação: {exc}"})
+            return json.dumps({"status": "error", "message": f"the annotation failed: {exc}"})
     out["detections"] = _detections_json(out_dets)
     out["inference_ms"] = round(inference_ms, 2)
     return json.dumps(out)

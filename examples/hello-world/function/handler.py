@@ -1,15 +1,16 @@
-"""Função Hello World contra o contrato da ADR-0008.
+"""Hello world function.
 
-Não tem estado pesado para carregar (diferente do alpr, que carrega
-o modelo no import) — serve para exercitar o contrato em si
-(watchdog-lite + index.py + handle()) com cold start mínimo.
+It has no heavy state to load, unlike the detection examples that load a
+model at import time, so it exercises the execution contract itself, the
+watchdog, the HTTP process and the handler, with a minimal cold start.
 
-Contrato de entrada/saída:
+Input and output contract:
 
-    entrada:  string crua (corpo da requisição); vazia vira "world"
-    saída:    JSON válido (obrigatório — o agente rejeita com 502 qualquer
-              resposta que não seja JSON, ADR-0008 item 3):
-              {"message": "Hello, <entrada>!"}
+    input:   a raw string, the body of the request; an empty body becomes
+             "world"
+    output:  valid JSON, which is mandatory, since the node rejects with a
+             bad gateway any answer that is not JSON:
+             {"message": "Hello, <input>!"}
 """
 
 import json

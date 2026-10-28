@@ -1,13 +1,13 @@
-"""Processo HTTP mínimo esperado pelo watchdog-lite (ADR-0008): escuta em
-127.0.0.1:$PORT e chama handle() a cada requisição recebida. O
-watchdog-lite fala com este processo por loopback interno ao contêiner —
-nenhuma configuração de rede além disso é necessária.
+"""Minimal HTTP process expected by the watchdog: it listens on
+127.0.0.1:$PORT and calls handle() on every request received. The watchdog
+talks to this process over the loopback interface of the container, so no
+other network configuration is needed.
 
-Bind-first + lazy-load: o socket é aberto ANTES do import pesado de
-function.handler (que carrega o modelo ncnn via ultralytics uma única
-vez) — esse import roda numa thread de fundo, seguido de uma inferência
-dummy de warmup (_warmup), e só então sinaliza _ready; até lá
-GET /_/ready e POST / respondem 503."""
+Bind first and lazy load: the socket is opened BEFORE the heavy import of
+function.handler, which loads the ncnn model through the ultralytics
+runtime once. That import runs in a background thread, followed by a dummy
+inference, and only then is the ready event signaled; until then the
+readiness route and the post route answer with a rejection."""
 import json
 import os
 import threading
@@ -18,18 +18,19 @@ _handle = None
 
 
 def _warmup(handle_fn):
-    """Inferência dummy best-effort antes de sinalizar prontidão.
+    """Best effort dummy inference before the readiness is signaled.
 
-    O primeiro `model(...)` paga ~30 s no ARM (page-in das .so nativas
-    — libtorch/libopencv/libncnn — no primeiro forward, platô 2 do cold
-    start). Rodar esse custo aqui, ainda com `_ready` desligado, move o
-    platô para dentro do `readiness_ms`: a primeira invocação real paga
-    só warm (~300 ms) em vez de readiness + 32 s de function. Fail-open
-    por desenho: qualquer falha só loga e a prontidão segue — warmup
-    nunca pode travar uma instância saudável.
+    The first call of the model pays about thirty seconds on an ARM
+    processor, which is the page-in of the native libraries on the first
+    forward. Paying that cost here, while the ready event is still unset,
+    moves the plateau into the readiness measurement, so the first real
+    invocation pays only the warm path instead of the readiness plus the
+    cold function. It fails open by design: a failure is only logged and
+    the readiness still follows, since the warmup can never block a healthy
+    instance.
     """
     if os.environ.get("SKIP_WARMUP", "").lower() in ("1", "true", "yes"):
-        print("index.py: warmup pulado (SKIP_WARMUP)", flush=True)
+        print("index.py: warmup skipped (SKIP_WARMUP)", flush=True)
         return
     try:
         import base64
@@ -40,14 +41,14 @@ def _warmup(handle_fn):
         img = np.zeros((64, 64, 3), dtype=np.uint8)
         ok, buf = cv2.imencode(".jpg", img)
         if not ok:
-            raise RuntimeError("cv2.imencode falhou no warmup")
+            raise RuntimeError("cv2.imencode failed during the warmup")
         payload = json.dumps(
             {"image_base64": base64.b64encode(buf.tobytes()).decode("utf-8")}
         )
         handle_fn(payload)
         print("index.py: warmup OK", flush=True)
-    except Exception as exc:  # fail-open: loga e segue para _ready
-        print(f"index.py: warmup falhou (fail-open): {exc}", flush=True)
+    except Exception as exc:  # Fail open: log it and signal the readiness.
+        print(f"index.py: warmup failed (fail open): {exc}", flush=True)
 
 
 def _load():
@@ -103,5 +104,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=_load, daemon=True).start()
     port = int(os.environ.get("PORT", "8081"))
-    print(f"index.py: escutando em 127.0.0.1:{port}", flush=True)
+    print(f"index.py: listening on 127.0.0.1:{port}", flush=True)
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()

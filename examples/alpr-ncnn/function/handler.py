@@ -1,28 +1,30 @@
-"""Função ALPR (detecção de placa, backend ncnn) contra o contrato da ADR-0008.
+"""ALPR function, which is license plate detection with the ncnn backend.
 
-Primeiro estágio do pipeline ALPR na borda (ARM aarch64): recebe a
-imagem da cena e devolve as coordenadas da(s) placa(s). Usa o mesmo
-treino do servidor exportado para ncnn em imgsz=640
-(`best_ncnn_model/`: `model.ncnn.bin` + `model.ncnn.param`, 4.8 MB +
-28 KB) via ultralytics + ncnn — MODELS.md §2. É o par de borda do
-[`alpr`](../alpr) (servidor): mesma entrada e mesma saída JSON, só muda
-o backend do detector.
+It is the first stage of the license plate pipeline at the edge, on an ARM
+aarch64 processor: it receives the image of the scene and returns the
+coordinates of the plates. It uses the same training as the server,
+exported to ncnn with an image size of 640, which is the directory
+`best_ncnn_model` with the weights and the parameters of the network, of
+4.8 MB and 28 KB, through the ultralytics runtime and the ncnn backend. It
+is the edge counterpart of the server example: the input and the JSON output
+are the same, only the backend of the detector changes.
 
-Métricas no ARM (mesmos pesos do `.pt`, entrada 640, threads=4):
-mAP50 0.995 / mAP50-95 0.984, infer ~222 ms em 4× Cortex-A55 (~4×
-mais rápido que o export em 1280 e ~11× que torch CPU).
+Measured on an ARM processor with the same weights, an input of 640 and four
+threads: a mean average precision at the threshold of 0.5 of 0.995 and at
+the threshold of 0.95 of 0.984, and an inference of about 222 ms on four
+Cortex-A55 cores, which is about four times faster than the export with an
+image size of 1280 and about eleven times faster than the CPU backend of
+torch.
 
-O modelo é carregado uma única vez, no import do módulo — é isso que o
-watchdog-lite aproveita ao manter o processo vivo entre invocações (ver
-docs/ADR-0008-contrato-execucao-funcao.md, item 1). `handle(req)` é
-chamada repetidamente por index.py a cada requisição recebida.
+The model is loaded once, at the import of the module, which is what the
+watchdog exploits by keeping the process alive between invocations. The
+handler is called repeatedly by the HTTP process on every request received.
 
-Contrato de entrada/saída (input/result de InvocationRequest/
-ExecutionResponse, modelo-dados-schemas.md, Seções 5 e 8):
+Input and output contract:
 
-    entrada:  {"image_base64": "<jpg ou png em base64>"}
-    saída:    {"status": "success", "detections": [...]}
-           ou {"status": "error", "message": "..."}
+    input:   {"image_base64": "<jpg or png in base64>"}
+    output:  {"status": "success", "detections": [...]}
+             or {"status": "error", "message": "..."}
 """
 import base64
 import binascii
@@ -36,16 +38,16 @@ from ultralytics import YOLO  # noqa: E402
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./best_ncnn_model")
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
-# imgsz=640 é o tamanho validado no ARM (MODELS.md §2, threads=4,
-# infer ~222 ms — ~4× mais rápido que 1280 com mAP50 idêntico).
-# O shape é congelado na exportação ncnn: o valor aqui só precisa
-# coincidir com o do export (metadata.yaml).
+# The image size of 640 is the validated one on ARM, with four threads and
+# an inference of about 222 ms, which is about four times faster than 1280
+# with the same mean average precision. The shape is frozen in the ncnn
+# export, so the value here only has to match the one of the export.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "640"))
 
-# Carregado uma vez só — todo o ganho do pool de instâncias mínimas
-# (RF-01, ADR-0005) depende disso: o cold start de carregar o modelo
-# não pode acontecer a cada invocação. O diretório ncnn é detectado
-# pelo backend ncnn do ultralytics (mesma API do .pt).
+# Loaded only once, which is what the pool of minimal instances depends on:
+# the cold start of loading the model cannot happen on every invocation. The
+# ncnn directory is detected by the ncnn backend of the ultralytics runtime,
+# which exposes the same API as the checkpoint.
 model = YOLO(MODEL_PATH)
 
 
@@ -54,7 +56,7 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
     tmp_path = "/tmp/invocation_input.jpg"
     with open(tmp_path, "wb") as f:
@@ -63,10 +65,10 @@ def handle(req: str) -> str:
     try:
         results = model(tmp_path, conf=CONFIDENCE_THRESHOLD, imgsz=IMAGE_SIZE, verbose=False)
         if not results:
-            return json.dumps({"status": "error", "message": "modelo não retornou resultado (imagem inválida ou corrompida?)"})
+            return json.dumps({"status": "error", "message": "the model returned no result, the image is invalid or corrupted"})
         result = results[0]
-    except Exception as exc:  # inferência pode falhar por imagem corrompida etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a corrupted image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
 
     detections = []
     if result.obb is not None:

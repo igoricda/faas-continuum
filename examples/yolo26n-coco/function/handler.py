@@ -1,42 +1,43 @@
-"""Função de detecção de objetos (YOLO26n COCO, modelo completo) contra o
-contrato da ADR-0008.
+"""Object detection function, with the YOLO26n model trained on COCO and the
+full backend.
 
-Exemplo de referência — par **amd64** do
-[`yolo26n-coco-ncnn-slim`](../yolo26n-coco-ncnn-slim) (borda ARM): mesma
-entrada, mesma saída JSON, só muda o backend do detector (torch/ultralytics
-aqui, ncnn direto lá).
+It is the reference example and the amd64 counterpart of the slim ncnn
+example, which runs at the edge on ARM: the input and the JSON output are
+the same and only the backend of the detector changes, with torch and the
+ultralytics runtime here and the direct ncnn runtime there.
 
-Modelo: `yolo26n.pt` — o YOLO26 nano **default do ultralytics, pré-treinado
-no COCO** (80 classes, task=detect, 5,3 MB), via ultralytics 8.4.153 + torch.
-Sem finetune, sem dataset próprio: é o modelo que o `ultralytics` baixa
-sozinho no primeiro `YOLO("yolo26n.pt")` (assets v8.4.0).
+The model is the nano variant of YOLO26 with the default weights of the
+ultralytics runtime, pre-trained on COCO, with eighty classes, the
+detection task and 5.3 MB, through the ultralytics runtime and torch. There
+is no fine tuning and no private dataset, since it is the model that the
+runtime downloads on the first load.
 
-O `rect=False` no `model(...)` é deliberado e é a única diferença em
-relação ao default do `yolo predict`: ele força o letterbox **quadrado**
-640×640 (padding 114), que é o shape estático congelado no export ncnn do
-par slim. Sem ele o ultralytics usaria o retângulo mínimo (`rect=True`) e
-os dois exemplos divergiriam no pré-processamento (mesma classe e mesma
-contagem, confiança diferente na casa de 1e-2 — medido, ver README).
+The rectangular inference is disabled on purpose and it is the only
+difference in relation to the default of the prediction command: it forces
+the square letterbox of 640 by 640 with a padding of 114, which is the
+static shape frozen in the ncnn export of the slim counterpart. Without it
+the runtime would use the smallest rectangle and the two examples would
+diverge in the pre-processing, with the same class and the same count but a
+confidence that differs by about one hundredth.
 
-O modelo é carregado uma única vez, no import do módulo — é isso que o
-watchdog-lite aproveita ao manter o processo vivo entre invocações (ver
-docs/ADR-0008-contrato-execucao-funcao.md, item 1). `handle(req)` é
-chamada repetidamente por index.py a cada requisição recebida.
+The model is loaded once, at the import of the module, which is what the
+watchdog exploits by keeping the process alive between invocations. The
+handler is called repeatedly by the HTTP process on every request received.
 
-Contrato de entrada/saída (input/result de InvocationRequest/
-ExecutionResponse, modelo-dados-schemas.md, Seções 5 e 8):
+Input and output contract:
 
-    entrada:  {"image_base64": "<jpg ou png em base64>"}
-    saída:    {"status": "success", "image_base64": "<jpg anotado>",
-               "image_format": "jpeg", "image_size": {...},
-               "detections": [...], "inference_ms": 12.3}
-           ou {"status": "error", "message": "..."}
+    input:   {"image_base64": "<jpg or png in base64>"}
+    output:  {"status": "success", "image_base64": "<annotated jpg>",
+              "image_format": "jpeg", "image_size": {...},
+              "detections": [...], "inference_ms": 12.3}
+             or {"status": "error", "message": "..."}
 
-O desenho das caixas é feito aqui com cv2 (e não com `result.plot()`) para
-que a imagem anotada saia **byte-idêntica** à do par slim ncnn: o
-`plot()` do ultralytics desenha com PIL/fonte própria, que o par slim não
-traz. O helper `_annotate` e a paleta são cópias idênticas nos dois
-handlers (conferidas com diff).
+The boxes are drawn here with the image library and not with the plotting
+helper of the runtime, so that the annotated image comes out byte identical
+to the one of the slim ncnn counterpart: the plotting helper of the runtime
+draws with its own font library, which the slim counterpart does not bring.
+The annotation helper and the palette are identical copies in both
+handlers.
 """
 import base64
 import binascii
@@ -52,25 +53,30 @@ import numpy as np  # noqa: E402
 from ultralytics import YOLO  # noqa: E402
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./yolo26n.pt")
-# Defaults do ultralytics (DEFAULT_CFG): conf 0.25, iou 0.7, max_det 300.
+# The defaults of the ultralytics runtime: a confidence of 0.25, an
+# intersection over union of 0.7 and at most three hundred detections.
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.7"))
 MAX_DET = int(os.environ.get("MAX_DET", "300"))
-# imgsz=640 é o imgsz default do modelo e o shape do export ncnn do par
-# slim — os dois exemplos precisam inferir no mesmo tamanho.
+# The image size of 640 is the default of the model and the shape of the ncnn
+# export of the slim counterpart, so the two examples have to infer at the
+# same size.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "640"))
-# ANNOTATE=0 devolve só as detecções (sem base64): para clientes que
-# precisam do JSON leve ou que desenham a imagem no próprio front.
+# With the annotation disabled the answer carries only the detections and no
+# encoded image, which suits clients that need a light JSON or that draw the
+# image themselves.
 ANNOTATE = os.environ.get("ANNOTATE", "1").lower() not in ("0", "false", "no")
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "85"))
-# ANNOTATE_MAX_SIDE=0 mantém a resolução de entrada. Com valor > 0, a
-# imagem anotada é reduzida (e as coordenadas acompanham) para caber no
-# teto de saída do nó (max_function_output_bytes, 8 MiB por default) —
-# útil em entrada 4K, que estoura o base64.
+# With a maximum side of zero the resolution of the input is kept. With a
+# positive value the annotated image is reduced, and the coordinates follow
+# it, so that it fits the output ceiling of the node, which is eight
+# mebibytes by default, which is useful for a 4K input that overflows the
+# encoded image.
 ANNOTATE_MAX_SIDE = int(os.environ.get("ANNOTATE_MAX_SIDE", "0"))
 
-# Paleta do ultralytics 8.4.153 (utils/plotting.py::Colors.hexs) — a
-# mesma do Annotator, para a anotação ter a cara do `yolo predict`.
+# The palette of the ultralytics runtime, the same one used by its
+# annotator, so that the annotation looks like the output of the prediction
+# command.
 _PALETTE = (
     "042AFF", "0BDBEB", "F3F3F3", "00DFB7", "111F68",
     "FF6FDD", "FF444F", "CCED00", "00F344", "BD00FF",
@@ -78,24 +84,24 @@ _PALETTE = (
     "7D24FF", "7B0068", "FF1B6C", "FC6D2F", "A2FF0B",
 )
 
-# Carregado uma vez só — todo o ganho do pool de instâncias mínimas
-# (RF-01, ADR-0005) depende disso: o cold start de carregar o modelo
-# não pode acontecer a cada invocação.
+# Loaded only once, which is what the pool of minimal instances depends on:
+# the cold start of loading the model cannot happen on every invocation.
 model = YOLO(MODEL_PATH)
 
 
 def _bgr(cls_id):
-    """Cor da classe como tupla BGR (o cv2 desenha em BGR)."""
+    """The color of the class as a BGR tuple, since the image library draws
+    in BGR."""
     h = _PALETTE[int(cls_id) % len(_PALETTE)]
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     return b, g, r
 
 
 def _annotate(bgr, dets):
-    """Desenha as caixas e o rótulo (classe + confiança) em cima de
-    `bgr` (modifica in-place). Espelha o Annotator do ultralytics: mesma
-    paleta, mesma espessura de linha (lw = max(round(sum(shape)/2*0.003),
-    2)) e mesmo texto branco sobre a cor da classe."""
+    """Draws the boxes and the label, with the class and the confidence, on
+    top of the image, which it modifies in place. It mirrors the annotator of
+    the ultralytics runtime, with the same palette, the same line thickness
+    and the same white text over the color of the class."""
     lw = max(round(sum(bgr.shape) / 2 * 0.003), 2)
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(lw / 3.0, 0.5)
@@ -114,8 +120,9 @@ def _annotate(bgr, dets):
 
 
 def _resize_for_output(bgr, dets):
-    """Aplica ANNOTATE_MAX_SIDE (0 = mantém). Devolve (imagem, detecções)
-    com as coordenadas no sistema da imagem devolvida."""
+    """Applies the maximum side of the annotation, where zero keeps the
+    original size. It returns the image and the detections with the
+    coordinates in the coordinate system of the returned image."""
     if ANNOTATE_MAX_SIDE <= 0:
         return bgr, dets
     h, w = bgr.shape[:2]
@@ -131,7 +138,7 @@ def _resize_for_output(bgr, dets):
 def _encode_jpeg(bgr):
     ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     if not ok:
-        raise RuntimeError("cv2.imencode falhou")
+        raise RuntimeError("the image could not be encoded")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
@@ -152,14 +159,15 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
-    # Mesmo decode dos dois exemplos: cv2 IMREAD_COLOR devolve BGR já
-    # corrigido pela orientação do EXIF, e é isso que o ultralytics
-    # consome (o predictor troca BGR->RGB e divide por 255).
+    # The two examples decode the image the same way: the color mode of the
+    # image library returns BGR already corrected by the orientation of the
+    # EXIF header, and that is what the runtime consumes, since the predictor
+    # swaps the channels and divides by 255.
     img = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        return json.dumps({"status": "error", "message": "imagem inválida ou corrompida (não decodificável)"})
+        return json.dumps({"status": "error", "message": "invalid or corrupted image, it cannot be decoded"})
 
     t0 = time.perf_counter()
     try:
@@ -169,18 +177,18 @@ def handle(req: str) -> str:
             iou=IOU_THRESHOLD,
             max_det=MAX_DET,
             imgsz=IMAGE_SIZE,
-            rect=False,  # letterbox quadrado — igual ao export ncnn do par slim
+            rect=False,  # Square letterbox, the same as the ncnn export.
             verbose=False,
         )
         if not results:
-            return json.dumps({"status": "error", "message": "modelo não retornou resultado (imagem inválida ou corrompida?)"})
+            return json.dumps({"status": "error", "message": "the model returned no result, the image is invalid or corrupted"})
         boxes = results[0].boxes
         dets = [
             (int(b.cls), float(b.conf), tuple(float(v) for v in b.xyxy[0].tolist()))
             for b in boxes
         ]
-    except Exception as exc:  # inferência pode falhar por imagemdegenerada etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a degenerate image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
     inference_ms = (time.perf_counter() - t0) * 1000.0
 
     out = {"status": "success"}
@@ -193,7 +201,7 @@ def handle(req: str) -> str:
             out["image_format"] = "jpeg"
             out["image_size"] = {"width": int(canvas.shape[1]), "height": int(canvas.shape[0])}
         except Exception as exc:
-            return json.dumps({"status": "error", "message": f"falha na anotação: {exc}"})
+            return json.dumps({"status": "error", "message": f"the annotation failed: {exc}"})
     out["detections"] = _detections_json(out_dets)
     out["inference_ms"] = round(inference_ms, 2)
     return json.dumps(out)

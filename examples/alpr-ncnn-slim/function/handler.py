@@ -1,32 +1,34 @@
-"""Função ALPR (detecção de placa, backend ncnn direto) contra o contrato da ADR-0008.
+"""ALPR function, which is license plate detection with the direct ncnn
+backend.
 
-Par slim de [`alpr-ncnn`](../alpr-ncnn): mesma entrada e mesma saída
-JSON, mesmo modelo (`best_ncnn_model/`, exportado em imgsz=640), mas
-SEM torch/ultralytics — só `ncnn` + `numpy` + `opencv-headless`. O
-export ncnn já traz o decode embutido no grafo (anchors/strides/
-sigmoid/cos-sin — verificado na cauda do `model.ncnn.param`), então o
-runtime aqui é: letterbox -> ncnn in0/out0 -> filtro de confiança ->
-fast-NMS com IoU probabilístico (probiou) -> scale-back. Paridade
-bit-exata contra o handler ultralytics validada em imagens reais
-(diff 0 em classe, confiança e nos 5 campos do OBB, inclusive com 4
-detecções via NMS).
+It is the slim counterpart of the ncnn example: the input and the JSON output
+are the same and the model is the same, the directory `best_ncnn_model`
+exported with an image size of 640, but without torch and without
+ultralytics, with only ncnn, numpy and the headless build of opencv. The ncnn
+export already carries the decoding inside the graph, with the anchors, the
+strides, the sigmoid and the cosine and sine, so the runtime here is the
+letterbox, the inference, the confidence filter, the fast suppression with
+the probabilistic intersection over union and the rescaling back to the
+original coordinates. The parity against the ultralytics handler was
+validated on real images, with no difference in the class, in the confidence
+and in the five fields of the oriented box, including with four detections
+kept by the suppression.
 
-Motivação: o torch é peso morto no caminho ncnn (o ultralytics o
-importa incondicionalmente) e domina o cold start no ARM — ~31 s de
-import + ~32 s de page-in no primeiro forward em TVBox com eMMC. Sem
-ele, o cold projetado cai para a casa de ~10 s (a confirmar no box).
+The motivation is that torch is dead weight in the ncnn path, since the
+ultralytics runtime imports it unconditionally, and it dominates the cold
+start on ARM, with about thirty-one seconds of import and about thirty-two
+seconds of page-in on the first forward on an embedded board with an eMMC
+storage. Without it, the projected cold start falls to about ten seconds.
 
-O modelo é carregado uma única vez, no import do módulo — é isso que o
-watchdog-lite aproveita ao manter o processo vivo entre invocações (ver
-docs/ADR-0008-contrato-execucao-funcao.md, item 1). `handle(req)` é
-chamada repetidamente por index.py a cada requisição recebida.
+The model is loaded once, at the import of the module, which is what the
+watchdog exploits by keeping the process alive between invocations. The
+handler is called repeatedly by the HTTP process on every request received.
 
-Contrato de entrada/saída (input/result de InvocationRequest/
-ExecutionResponse, modelo-dados-schemas.md, Seções 5 e 8):
+Input and output contract:
 
-    entrada:  {"image_base64": "<jpg ou png em base64>"}
-    saída:    {"status": "success", "detections": [...]}
-           ou {"status": "error", "message": "..."}
+    input:   {"image_base64": "<jpg or png in base64>"}
+    output:  {"status": "success", "detections": [...]}
+             or {"status": "error", "message": "..."}
 """
 import base64
 import binascii
@@ -39,11 +41,11 @@ import numpy as np
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./best_ncnn_model")
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
-# imgsz=640 é o tamanho validado no ARM (MODELS.md §2) e o shape
-# congelado no export ncnn: precisa coincidir com o imgsz do export
-# (metadata.yaml).
+# The image size of 640 is the validated one on ARM and the shape is frozen
+# in the ncnn export, so it has to match the image size of the export.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "640"))
-# NMS: mesmos padrões do ultralytics (DEFAULT_CFG iou=0.7, max_det=300).
+# The suppression uses the same patterns as the ultralytics runtime, with an
+# intersection over union of 0.7 and at most three hundred detections.
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.7"))
 MAX_DET = int(os.environ.get("MAX_DET", "300"))
 CLASS_NAME = "License-plate"
@@ -57,15 +59,15 @@ def _load_net(path):
     return net
 
 
-# Carregado uma vez só — todo o ganho do pool de instâncias mínimas
-# (RF-01, ADR-0005) depende disso: o cold start de carregar o modelo
-# não pode acontecer a cada invocação.
+# Loaded only once, which is what the pool of minimal instances depends on:
+# the cold start of loading the model cannot happen on every invocation.
 net = _load_net(MODEL_PATH)
 
 
 def letterbox(bgr, new_shape=640, color=(114, 114, 114)):
-    """Redimensiona + padding como o LetterBox do ultralytics (inclui o
-    arredondamento ±0.1 das bordas). Devolve (imagem, razão, (pad_x, pad_y))."""
+    """Resizes and pads the image like the letterbox of the ultralytics
+    runtime, including the rounding of the borders by one tenth. It returns the
+    image, the ratio and the padding on each axis."""
     h, w = bgr.shape[:2]
     r = min(new_shape / h, new_shape / w)
     nw, nh = round(w * r), round(h * r)
@@ -79,8 +81,9 @@ def letterbox(bgr, new_shape=640, color=(114, 114, 114)):
 
 
 def _covariance(boxes):
-    """(a, b, c) da gaussiana por OBB xywhr — espelha
-    _get_covariance_matrix (ultralytics/utils/metrics.py)."""
+    """The three coefficients of the gaussian of an oriented box given as
+    center, size and angle, which mirrors the covariance matrix of the
+    ultralytics runtime."""
     b = boxes.astype(np.float32)
     w2 = (b[:, 2] ** 2) / np.float32(12.0)
     h2 = (b[:, 3] ** 2) / np.float32(12.0)
@@ -93,8 +96,9 @@ def _covariance(boxes):
 
 
 def batch_probiou(boxes1, boxes2, eps=1e-7):
-    """IoU probabilístico par-a-par entre OBBs xywhr — espelha
-    batch_probiou (ultralytics/utils/metrics.py)."""
+    """The pairwise probabilistic intersection over union of two sets of
+    oriented boxes given as center, size and angle, which mirrors the batch
+    function of the ultralytics runtime."""
     x1 = boxes1[:, 0:1].astype(np.float32)
     y1 = boxes1[:, 1:2].astype(np.float32)
     x2 = boxes2[:, 0:1].T.astype(np.float32)
@@ -116,8 +120,8 @@ def batch_probiou(boxes1, boxes2, eps=1e-7):
 
 
 def fast_nms(boxes, scores, iou_thres, max_det=300):
-    """Fast-NMS via matriz triangular — espelha TorchNMS.fast_nms
-    (ultralytics/utils/nms.py)."""
+    """The fast suppression through a triangular matrix, which mirrors the
+    fast suppression of the ultralytics runtime."""
     if boxes.shape[0] == 0:
         return np.zeros((0,), dtype=np.int64)
     order = np.argsort(-scores, kind="stable")
@@ -129,8 +133,9 @@ def fast_nms(boxes, scores, iou_thres, max_det=300):
 
 
 def predict_bgr(bgr):
-    """Pipeline completo sobre imagem BGR; devolve obbs (N,7) como
-    [cx, cy, w, h, angle, conf, cls] em coordenadas originais."""
+    """The complete pipeline over a BGR image. It returns the oriented boxes
+    as an array of seven columns, with the center, the size, the angle, the
+    confidence and the class, in the original coordinates."""
     oh, ow = bgr.shape[:2]
     lb, _, (pad_x, pad_y) = letterbox(bgr, IMAGE_SIZE)
     rgb = lb[:, :, ::-1].astype(np.float32) / np.float32(255.0)
@@ -139,8 +144,9 @@ def predict_bgr(bgr):
     ex = net.create_extractor()
     ex.input("in0", ncnn.Mat(chw))
     _, out = ex.extract("out0")
-    # out0 (6,8400) = [cx, cy, w, h, conf, angle] já em px-640, com o
-    # decode (anchors/strides/sigmoid) embutido no grafo exportado.
+    # The output holds six rows by eight thousand four hundred columns, with
+    # the center, the size, the confidence and the angle already in pixels of
+    # the resized image, with the decoding built into the exported graph.
     pred = np.asarray(out).T
 
     filt = pred[:, 4] > np.float32(CONFIDENCE_THRESHOLD)
@@ -153,8 +159,9 @@ def predict_bgr(bgr):
     keep = fast_nms(np.concatenate([boxes, angles[:, None]], axis=1),
                     scores, np.float32(IOU_THRESHOLD), MAX_DET)
     k = p[keep]
-    # scale_boxes com xywh=True: o pad sai só de cx,cy; tudo /gain; o
-    # ângulo não é reescalado.
+    # The rescaling of the boxes works on the center and the size: the
+    # padding is removed from the center, every length is divided by the
+    # ratio, and the angle is not rescaled.
     gain = min(IMAGE_SIZE / oh, IMAGE_SIZE / ow)
     cx = (k[:, 0] - pad_x) / gain
     cy = (k[:, 1] - pad_y) / gain
@@ -170,16 +177,16 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
     img = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return json.dumps({"status": "error",
-                           "message": "modelo não retornou resultado (imagem inválida ou corrompida?)"})
+                           "message": "the model returned no result, the image is invalid or corrupted"})
     try:
         obbs = predict_bgr(img)
-    except Exception as exc:  # inferência pode falhar por imagem corrompida etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a corrupted image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
 
     detections = []
     for o in obbs:

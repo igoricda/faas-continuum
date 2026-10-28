@@ -1,21 +1,28 @@
-"""Função ALPR (detecção de placa, backend ONNX Runtime direto) contra o contrato da ADR-0008.
+"""ALPR function, which is license plate detection with the direct ONNX
+Runtime backend.
 
-Handler ONNX do detector (`best.onnx`, exportado em imgsz=1280, mAP
-idêntico ao `.pt` validado na calib): mesma entrada e mesma saída JSON
-do handler torch original, mas SEM torch/ultralytics — só
-`onnxruntime` + `numpy` + `opencv-headless`. O export ONNX já traz o
-decode embutido no grafo (grids/strides/sigmoid, como no export ncnn),
-então o runtime aqui é: letterbox -> ORT `images`/`output0` -> filtro
-de confiança -> fast-NMS com IoU probabilístico (probiou) ->
-scale-back. O pós-processamento (letterbox/NMS/scale-back) é port
-verbatim de `examples/alpr-ncnn-slim/function/handler.py`, cuja
-paridade contra o ultralytics foi validada (aqui: mesmo N/classe/rank,
-conf ±0.002, OBB ±1px em 5 imagens).
+It is the ONNX handler of the detector, with the model exported to an image
+size of 1280 and the same accuracy as the validated checkpoint. The input
+and the JSON output are the same as the ones of the original handler built
+on torch, but without torch and without ultralytics, with only the ONNX
+runtime, numpy and the headless build of opencv. The ONNX export already
+carries the decoding inside the graph, with the grids, the strides and the
+sigmoid, as in the ncnn export, so the runtime here is the letterbox, the
+inference, the confidence filter, the fast suppression with the
+probabilistic intersection over union and the rescaling back to the original
+coordinates. The post-processing, with the letterbox, the suppression and
+the rescaling, is a verbatim port of the slim ncnn handler, whose parity
+against the ultralytics runtime was validated. Here the parity was checked
+on five images, with the same number of detections, the same classes and the
+same ranking, a confidence within two thousandths and an oriented box
+within one pixel.
 
-Motivação: no ACA (x86, Consumption) o cold de ~42 s é dominado pelo
-pull da imagem de ~3 GB, cujo grosso é torch+CUDA+ultralytics (pull de
-987 MB comprimidos medido em 15,9 s). Sem eles, a imagem cai para ~1 GB
-e o import de ~3 s para ~1 s.
+The motivation is that on a consumption x86 host the cold start of about
+forty-two seconds is dominated by the pull of an image of about three
+gigabytes, whose bulk is torch, CUDA and ultralytics, measured at a pull of
+987 compressed megabytes in 15.9 seconds. Without them the image falls to
+about one gigabyte and the import of about three seconds falls to about one
+second.
 """
 import base64
 import binascii
@@ -28,10 +35,13 @@ import onnxruntime as ort
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./best.onnx")
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
-# imgsz=1280 = tamanho do export best.onnx e do handler torch (MODELS.md
-# §1: P 1.0 / R 1.0, mAP50 0.995 no data_calib, dataset 1280×720).
+# The image size of 1280 is the size of the export and of the torch handler,
+# with a precision of 1.0, a recall of 1.0 and a mean average precision at
+# the threshold of 0.5 of 0.995 on the calibration set of 1280 by 720
+# images.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "1280"))
-# NMS: mesmos padrões do ultralytics (DEFAULT_CFG iou=0.7, max_det=300).
+# The suppression uses the same patterns as the ultralytics runtime, with an
+# intersection over union of 0.7 and at most three hundred detections.
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.7"))
 MAX_DET = int(os.environ.get("MAX_DET", "300"))
 CLASS_NAME = "License-plate"
@@ -42,9 +52,9 @@ if _ort_threads > 0:
     _sess_options.intra_op_num_threads = _ort_threads
     _sess_options.inter_op_num_threads = _ort_threads
 
-# Carregado uma vez só, no import — o watchdog-lite/host reaproveita o
-# processo entre invocações, então o cold de load não se repete por
-# request (só por réplica fria).
+# Loaded only once, at the import, since the watchdog and the host reuse the
+# process between invocations, so the load is not repeated on every request
+# and only happens on a cold replica.
 _sess = ort.InferenceSession(
     MODEL_PATH, sess_options=_sess_options, providers=["CPUExecutionProvider"]
 )
@@ -53,8 +63,9 @@ _OUT_NAME = _sess.get_outputs()[0].name
 
 
 def letterbox(bgr, new_shape=1280, color=(114, 114, 114)):
-    """Redimensiona + padding como o LetterBox do ultralytics (inclui o
-    arredondamento ±0.1 das bordas). Devolve (imagem, razão, (pad_x, pad_y))."""
+    """Resizes and pads the image like the letterbox of the ultralytics
+    runtime, including the rounding of the borders by one tenth. It returns the
+    image, the ratio and the padding on each axis."""
     h, w = bgr.shape[:2]
     r = min(new_shape / h, new_shape / w)
     nw, nh = round(w * r), round(h * r)
@@ -68,8 +79,9 @@ def letterbox(bgr, new_shape=1280, color=(114, 114, 114)):
 
 
 def _covariance(boxes):
-    """(a, b, c) da gaussiana por OBB xywhr — espelha
-    _get_covariance_matrix (ultralytics/utils/metrics.py)."""
+    """The three coefficients of the gaussian of an oriented box given as
+    center, size and angle, which mirrors the covariance matrix of the
+    ultralytics runtime."""
     b = boxes.astype(np.float32)
     w2 = (b[:, 2] ** 2) / np.float32(12.0)
     h2 = (b[:, 3] ** 2) / np.float32(12.0)
@@ -82,8 +94,9 @@ def _covariance(boxes):
 
 
 def batch_probiou(boxes1, boxes2, eps=1e-7):
-    """IoU probabilístico par-a-par entre OBBs xywhr — espelha
-    batch_probiou (ultralytics/utils/metrics.py)."""
+    """The pairwise probabilistic intersection over union of two sets of
+    oriented boxes given as center, size and angle, which mirrors the batch
+    function of the ultralytics runtime."""
     x1 = boxes1[:, 0:1].astype(np.float32)
     y1 = boxes1[:, 1:2].astype(np.float32)
     x2 = boxes2[:, 0:1].T.astype(np.float32)
@@ -105,8 +118,8 @@ def batch_probiou(boxes1, boxes2, eps=1e-7):
 
 
 def fast_nms(boxes, scores, iou_thres, max_det=300):
-    """Fast-NMS via matriz triangular — espelha TorchNMS.fast_nms
-    (ultralytics/utils/nms.py)."""
+    """The fast suppression through a triangular matrix, which mirrors the
+    fast suppression of the ultralytics runtime."""
     if boxes.shape[0] == 0:
         return np.zeros((0,), dtype=np.int64)
     order = np.argsort(-scores, kind="stable")
@@ -118,16 +131,18 @@ def fast_nms(boxes, scores, iou_thres, max_det=300):
 
 
 def predict_bgr(bgr):
-    """Pipeline completo sobre imagem BGR; devolve obbs (N,7) como
-    [cx, cy, w, h, angle, conf, cls] em coordenadas originais."""
+    """The complete pipeline over a BGR image. It returns the oriented boxes
+    as an array of seven columns, with the center, the size, the angle, the
+    confidence and the class, in the original coordinates."""
     oh, ow = bgr.shape[:2]
     lb, _, (pad_x, pad_y) = letterbox(bgr, IMAGE_SIZE)
     rgb = lb[:, :, ::-1].astype(np.float32) / np.float32(255.0)
     nchw = np.ascontiguousarray(rgb.transpose(2, 0, 1))[None]
 
-    # output0 (1,6,33600) = [cx, cy, w, h, conf, angle] já em px-1280,
-    # com o decode embutido no grafo exportado (mesmo layout do out0
-    # ncnn em 640).
+    # The output holds one batch of six rows by thirty-three thousand six
+    # hundred columns, with the center, the size, the confidence and the angle
+    # already in pixels of the resized image, with the decoding built into the
+    # exported graph, in the same layout as the ncnn output at 640.
     pred = _sess.run([_OUT_NAME], {_IN_NAME: nchw})[0][0].T
 
     filt = pred[:, 4] > np.float32(CONFIDENCE_THRESHOLD)
@@ -140,8 +155,9 @@ def predict_bgr(bgr):
     keep = fast_nms(np.concatenate([boxes, angles[:, None]], axis=1),
                     scores, np.float32(IOU_THRESHOLD), MAX_DET)
     k = p[keep]
-    # scale_boxes com xywh=True: o pad sai só de cx,cy; tudo /gain; o
-    # ângulo não é reescalado.
+    # The rescaling of the boxes works on the center and the size: the
+    # padding is removed from the center, every length is divided by the
+    # ratio, and the angle is not rescaled.
     gain = min(IMAGE_SIZE / oh, IMAGE_SIZE / ow)
     cx = (k[:, 0] - pad_x) / gain
     cy = (k[:, 1] - pad_y) / gain
@@ -157,16 +173,16 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
     img = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         return json.dumps({"status": "error",
-                           "message": "modelo não retornou resultado (imagem inválida ou corrompida?)"})
+                           "message": "the model returned no result, the image is invalid or corrupted"})
     try:
         obbs = predict_bgr(img)
-    except Exception as exc:  # inferência pode falhar por imagem corrompida etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a corrupted image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
 
     detections = []
     for o in obbs:

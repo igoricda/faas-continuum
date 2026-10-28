@@ -1,37 +1,38 @@
-"""Função de detecção de objetos (YOLO26n COCO) na borda ARM, backend ncnn
-direto, contra o contrato da ADR-0008.
+"""Object detection function, with the YOLO26n model trained on COCO, the
+direct ncnn backend and an ARM edge host.
 
-Par slim de [`yolo26n-coco`](../yolo26n-coco) (amd64): **mesma entrada e
-mesma saída JSON, mesmos pesos** — mas SEM torch/ultralytics. Só `ncnn` +
-`numpy` + `opencv-headless` (`function/requirements.txt`).
+It is the slim counterpart of the amd64 example: the input and the JSON
+output are the same and the weights are the same, but without torch and
+without ultralytics, with only ncnn, numpy and the headless build of
+opencv.
 
-O export ncnn (`yolo export format=ncnn imgsz=640`) já traz o decode no
-grafo — anchors, strides, sigmoid e o scale dos strides estão na cauda do
-`model.ncnn.param` (ver `Concat cat_22` + `Sigmoid sigmoid_0`), então o
-`out0` sai como (84, 8400) = [cx, cy, w, h, 80 classes] em px-640. O
-handler replica o resto do caminho do ultralytics em numpy: letterbox
-(com o arredondamento ±0.1 das bordas) → ncnn `in0`/`out0` → melhor
-classe por caixa → NMS com offset de classe → scale-back com clip.
+The ncnn export already carries the decoding inside the graph, with the
+anchors, the strides, the sigmoid and the scaling of the strides, so the
+output comes out as eighty-four rows by eight thousand four hundred columns,
+with the center, the size and the scores of the eighty classes, in pixels of
+the resized image. The handler replicates the rest of the path of the
+ultralytics runtime with numpy: the letterbox, with the rounding of the
+borders by one tenth, the inference, the best class per box, the suppression
+with the class offset and the rescaling back to the original coordinates
+with a clip.
 
-Motivação do slim: o torch é peso morto no caminho ncnn (o ultralytics o
-importa incondicionalmente) e domina o cold start no ARM. Sem ele, a
-imagem da TVBox (Debian 12, python:3.11-slim) fica na casa das centenas de
-MB em vez de GB, com um cold ordens de grandeza menor que o do par
-torch/ultralytics (ver README para os números medidos).
+The motivation for the slim variant is that torch is dead weight in the
+ncnn path, since the ultralytics runtime imports it unconditionally, and it
+dominates the cold start on ARM. Without it the image of the container stays
+in the hundreds of megabytes instead of gigabytes, with a cold start orders
+of magnitude smaller than the one of the counterpart built on torch.
 
-O modelo é carregado uma única vez, no import do módulo — é isso que o
-watchdog-lite aproveita ao manter o processo vivo entre invocações (ver
-docs/ADR-0008-contrato-execucao-funcao.md, item 1). `handle(req)` é
-chamada repetidamente por index.py a cada requisição recebida.
+The model is loaded once, at the import of the module, which is what the
+watchdog exploits by keeping the process alive between invocations. The
+handler is called repeatedly by the HTTP process on every request received.
 
-Contrato de entrada/saída (input/result de InvocationRequest/
-ExecutionResponse, modelo-dados-schemas.md, Seções 5 e 8):
+Input and output contract:
 
-    entrada:  {"image_base64": "<jpg ou png em base64>"}
-    saída:    {"status": "success", "image_base64": "<jpg anotado>",
-               "image_format": "jpeg", "image_size": {...},
-               "detections": [...], "inference_ms": 218.7}
-           ou {"status": "error", "message": "..."}
+    input:   {"image_base64": "<jpg or png in base64>"}
+    output:  {"status": "success", "image_base64": "<annotated jpg>",
+              "image_format": "jpeg", "image_size": {...},
+              "detections": [...], "inference_ms": 218.7}
+             or {"status": "error", "message": "..."}
 """
 import base64
 import binascii
@@ -44,34 +45,41 @@ import ncnn
 import numpy as np
 
 MODEL_PATH = os.environ.get("MODEL_PATH", "./yolo26n_ncnn_model")
-# Sem ultralytics para ler os nomes de classe do metadata.yaml, eles vêm
-# de um arquivo de texto puro gerado do yolo26n.pt (ver README, "Preparar").
+# Without the ultralytics runtime there is no metadata file to read the class
+# names from, so they come from a plain text file generated from the
+# checkpoint.
 NAMES_PATH = os.environ.get("NAMES_PATH", "./coco80.names")
-# Defaults do ultralytics (DEFAULT_CFG): conf 0.25, iou 0.7, max_det 300.
+# The defaults of the ultralytics runtime: a confidence of 0.25, an
+# intersection over union of 0.7 and at most three hundred detections.
 CONFIDENCE_THRESHOLD = float(os.environ.get("CONFIDENCE_THRESHOLD", "0.25"))
 IOU_THRESHOLD = float(os.environ.get("IOU_THRESHOLD", "0.7"))
 MAX_DET = int(os.environ.get("MAX_DET", "300"))
-# imgsz=640 é o imgsz default do modelo e o shape estático congelado no
-# export ncnn (metadata.yaml) — precisa coincidir com o do export.
+# The image size of 640 is the default of the model and the static shape
+# frozen in the ncnn export, so it has to match the one of the export.
 IMAGE_SIZE = int(os.environ.get("IMAGE_SIZE", "640"))
-# ANNOTATE=0 devolve só as detecções (sem base64): para clientes que
-# precisam do JSON leve ou que desenham a imagem no próprio front.
+# With the annotation disabled the answer carries only the detections and no
+# encoded image, which suits clients that need a light JSON or that draw the
+# image themselves.
 ANNOTATE = os.environ.get("ANNOTATE", "1").lower() not in ("0", "false", "no")
 JPEG_QUALITY = int(os.environ.get("JPEG_QUALITY", "85"))
-# ANNOTATE_MAX_SIDE=0 mantém a resolução de entrada. Com valor > 0, a
-# imagem anotada é reduzida (e as coordenadas acompanham) para caber no
-# teto de saída do nó (max_function_output_bytes, 8 MiB por default).
+# With a maximum side of zero the resolution of the input is kept. With a
+# positive value the annotated image is reduced, and the coordinates follow
+# it, so that it fits the output ceiling of the node, which is eight
+# mebibytes by default.
 ANNOTATE_MAX_SIDE = int(os.environ.get("ANNOTATE_MAX_SIDE", "0"))
-# N_THREADS=0 deixa o default do ncnn (que já abre mais de uma thread na
-# TVBox); >0 fixa. MODELS.md §2 validou threads=4 no ARM.
+# Zero leaves the default of the ncnn runtime, which already opens more than
+# one thread; a positive value pins the count, and four threads were
+# validated on ARM.
 N_THREADS = int(os.environ.get("N_THREADS", "0"))
-# Restos do non_max_suppression do ultralytics (utils/nms.py): o corte
-# antes do NMS e o offset que impede supressão entre classes diferentes.
+# The two constants of the suppression of the ultralytics runtime: the cut
+# applied before the suppression and the offset that prevents the
+# suppression between different classes.
 MAX_NMS = int(os.environ.get("MAX_NMS", "30000"))
 MAX_WH = np.float32(7680.0)
 
-# Paleta do ultralytics 8.4.153 (utils/plotting.py::Colors.hexs) — a
-# mesma do Annotator, para a anotação ter a cara do `yolo predict`.
+# The palette of the ultralytics runtime, the same one used by its
+# annotator, so that the annotation looks like the output of the prediction
+# command.
 _PALETTE = (
     "042AFF", "0BDBEB", "F3F3F3", "00DFB7", "111F68",
     "FF6FDD", "FF444F", "CCED00", "00F344", "BD00FF",
@@ -82,7 +90,7 @@ _PALETTE = (
 
 def _load_net(path):
     net = ncnn.Net()
-    net.opt.use_vulkan_compute = False  # sem GPU no alvo; e o driver Vulkan custa cold
+    net.opt.use_vulkan_compute = False  # No GPU on the target, and the driver costs a cold start.
     if N_THREADS > 0:
         net.opt.num_threads = N_THREADS
     net.load_param(os.path.join(path, "model.ncnn.param"))
@@ -94,20 +102,21 @@ def _load_names(path):
     with open(path, encoding="utf-8") as f:
         names = [line.strip() for line in f if line.strip()]
     if not names:
-        raise ValueError(f"lista de classes vazia em {path}")
+        raise ValueError(f"the list of classes in {path} is empty")
     return names
 
 
-# Ambos carregados uma vez só, no import — todo o ganho do pool de
-# instâncias mínimas (RF-01, ADR-0005) depende disso: o cold start de
-# carregar o modelo não pode acontecer a cada invocação.
+# Both are loaded only once, at the import, which is what the pool of
+# minimal instances depends on: the cold start of loading the model cannot
+# happen on every invocation.
 net = _load_net(MODEL_PATH)
 NAMES = _load_names(NAMES_PATH)
 
 
 def _letterbox(bgr, new_shape=640, color=(114, 114, 114)):
-    """Redimensiona + padding como o LetterBox do ultralytics (inclui o
-    arredondamento ±0.1 das bordas). Devolve (imagem, razão, (pad_x, pad_y))."""
+    """Resizes and pads the image like the letterbox of the ultralytics
+    runtime, including the rounding of the borders by one tenth. It returns the
+    image, the ratio and the padding on each axis."""
     h, w = bgr.shape[:2]
     r = min(new_shape / h, new_shape / w)
     nw, nh = round(w * r), round(h * r)
@@ -121,11 +130,12 @@ def _letterbox(bgr, new_shape=640, color=(114, 114, 114)):
 
 
 def _nms(boxes, scores, iou_thres):
-    """NMS gulosa, com supressão classe-a-classe já feita pelo offset do
-    chamador — espelha torchvision.ops.nms, que é o que o
-    non_max_suppression do ultralytics usa quando o torchvision está
-    importado (utils/nms.py:160): ordena por confiança e suprime o que
-    tiver IoU > limiar. `boxes` já vem com o offset de classe somado."""
+    """The greedy suppression, with the per-class suppression already done by
+    the offset applied by the caller. It mirrors the operator of the
+    torchvision library, which is what the ultralytics runtime uses when the
+    torchvision library is available: it orders by confidence and suppresses
+    every box whose intersection over union is above the threshold. The
+    boxes already carry the class offset."""
     order = np.argsort(-scores, kind="stable")
     b = boxes[order]
     x1, y1, x2, y2 = b[:, 0].copy(), b[:, 1].copy(), b[:, 2].copy(), b[:, 3].copy()
@@ -145,12 +155,13 @@ def _nms(boxes, scores, iou_thres):
 
 
 def _predict(bgr):
-    """Inferência completa sobre imagem BGR; devolve a lista de detecções
-    [(class_id, conf, (x1, y1, x2, y2)), ...] em coordenadas da imagem
-    original."""
+    """The complete inference over a BGR image. It returns the list of
+    detections, with the class, the confidence and the corners of the box, in
+    the coordinates of the original image."""
     oh, ow = bgr.shape[:2]
     lb, _gain, (pad_x, pad_y) = _letterbox(bgr, IMAGE_SIZE)
-    # ncnn espera RGB (o letterbox devolve BGR) normalizado em 0..1.
+    # The ncnn runtime expects RGB, since the letterbox returns BGR,
+    # normalized in the range from zero to one.
     chw = np.ascontiguousarray(
         (lb[:, :, ::-1].astype(np.float32) / np.float32(255.0)).transpose(2, 0, 1)
     )
@@ -158,20 +169,22 @@ def _predict(bgr):
     ex = net.create_extractor()
     ex.input("in0", ncnn.Mat(chw))
     _, out = ex.extract("out0")
-    # out0 (4+nc, 8400) = [cx, cy, w, h, scores...] já em px-640, com o
-    # decode embutido no grafo exportado. np.array copia: o buffer do Mat
-    # pertence ao extractor.
+    # The output holds four rows plus the classes by eight thousand four
+    # hundred columns, with the center, the size and the scores already in
+    # pixels of the resized image, with the decoding built into the exported
+    # graph. The array copies the data, since the buffer of the matrix
+    # belongs to the extractor.
     pred = np.array(out, dtype=np.float32).T  # (8400, 4+nc)
     del ex
 
     cls = pred[:, 4:]
     if cls.shape[1] != len(NAMES):
         raise ValueError(
-            f"modelo tem {cls.shape[1]} classes, {NAMES_PATH} tem {len(NAMES)} "
-            "(regere o arquivo a partir do .pt — ver README)"
+            f"the model has {cls.shape[1]} classes and {NAMES_PATH} has "
+            f"{len(NAMES)}, regenerate the file from the checkpoint"
         )
-    # Melhor classe por caixa: o non_max_suppression roda em single_label
-    # no predict (multi_label=False), então uma caixa = uma classe.
+    # The best class per box: the suppression of the runtime runs with a
+    # single label on the prediction, so one box carries one class.
     cls_id = np.argmax(cls, axis=1)
     conf = cls[np.arange(cls.shape[0]), cls_id]
     keep = conf > np.float32(CONFIDENCE_THRESHOLD)
@@ -179,23 +192,24 @@ def _predict(bgr):
         return []
 
     pred, cls_id, conf = pred[keep], cls_id[keep], conf[keep]
-    # xywh -> xyxy (o NMS do ultralytics converte antes de suprimir).
+    # The conversion from the center and the size to the corners, which the
+    # runtime does before the suppression.
     cx, cy, bw, bh = pred[:, 0], pred[:, 1], pred[:, 2], pred[:, 3]
     boxes = np.stack([cx - bw / 2, cy - bh / 2, cx + bw / 2, cy + bh / 2], axis=1)
     if boxes.shape[0] > MAX_NMS:
         top = np.argsort(-conf, kind="stable")[:MAX_NMS]
         boxes, cls_id, conf = boxes[top], cls_id[top], conf[top]
-    # Offset de classe (max_wh=7680): caixas de classes diferentes nunca
-    # se suprimem entre si (agnostic=False).
+    # The class offset: boxes of different classes never suppress each other.
     idx = _nms(boxes + cls_id[:, None].astype(np.float32) * MAX_WH,
                conf, np.float32(IOU_THRESHOLD))[:MAX_DET]
     boxes, cls_id, conf = boxes[idx], cls_id[idx], conf[idx]
 
-    # scale_boxes(padding=True, xywh=False) + clip_boxes: o pad sai de
-    # todos os cantos, tudo divide pelo gain, e o resultado é preso na
-    # imagem original. `xy` é uma cópia (o slice com lista de índices é
-    # fancy-index), então o out= do np.clip escreve nela e volta para
-    # `boxes` — clip direto em boxes[:, [0, 2]] seria descartado.
+    # The rescaling and the clip of the boxes: the padding is removed from
+    # every corner, every length is divided by the ratio, and the result is
+    # clamped to the original image. The temporary array is a copy, since the
+    # slice with an index list is a fancy index, so the clip writes into the
+    # copy and the result is assigned back to the boxes; a clip applied
+    # directly to the columns of the boxes would be discarded.
     gain = min(IMAGE_SIZE / oh, IMAGE_SIZE / ow)
     xy = (boxes[:, [0, 2]] - pad_x) / gain
     np.clip(xy, 0.0, float(ow), out=xy)
@@ -208,17 +222,18 @@ def _predict(bgr):
 
 
 def _bgr(cls_id):
-    """Cor da classe como tupla BGR (o cv2 desenha em BGR)."""
+    """The color of the class as a BGR tuple, since the image library draws
+    in BGR."""
     h = _PALETTE[int(cls_id) % len(_PALETTE)]
     r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
     return b, g, r
 
 
 def _annotate(bgr, dets):
-    """Desenha as caixas e o rótulo (classe + confiança) em cima de
-    `bgr` (modifica in-place). Espelha o Annotator do ultralytics: mesma
-    paleta, mesma espessura de linha (lw = max(round(sum(shape)/2*0.003),
-    2)) e mesmo texto branco sobre a cor da classe."""
+    """Draws the boxes and the label, with the class and the confidence, on
+    top of the image, which it modifies in place. It mirrors the annotator of
+    the ultralytics runtime, with the same palette, the same line thickness
+    and the same white text over the color of the class."""
     lw = max(round(sum(bgr.shape) / 2 * 0.003), 2)
     font = cv2.FONT_HERSHEY_SIMPLEX
     scale = max(lw / 3.0, 0.5)
@@ -237,8 +252,9 @@ def _annotate(bgr, dets):
 
 
 def _resize_for_output(bgr, dets):
-    """Aplica ANNOTATE_MAX_SIDE (0 = mantém). Devolve (imagem, detecções)
-    com as coordenadas no sistema da imagem devolvida."""
+    """Applies the maximum side of the annotation, where zero keeps the
+    original size. It returns the image and the detections with the
+    coordinates in the coordinate system of the returned image."""
     if ANNOTATE_MAX_SIDE <= 0:
         return bgr, dets
     h, w = bgr.shape[:2]
@@ -254,7 +270,7 @@ def _resize_for_output(bgr, dets):
 def _encode_jpeg(bgr):
     ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), JPEG_QUALITY])
     if not ok:
-        raise RuntimeError("cv2.imencode falhou")
+        raise RuntimeError("the image could not be encoded")
     return base64.b64encode(buf.tobytes()).decode("ascii")
 
 
@@ -275,19 +291,20 @@ def handle(req: str) -> str:
         data = json.loads(req)
         image_bytes = base64.b64decode(data["image_base64"], validate=True)
     except (KeyError, ValueError, TypeError, binascii.Error) as exc:
-        return json.dumps({"status": "error", "message": f"entrada inválida: {exc}"})
+        return json.dumps({"status": "error", "message": f"invalid input: {exc}"})
 
-    # Mesmo decode dos dois exemplos: cv2 IMREAD_COLOR devolve BGR já
-    # corrigido pela orientação do EXIF.
+    # The two examples decode the image the same way: the color mode of the
+    # image library returns BGR already corrected by the orientation of the
+    # EXIF header.
     img = cv2.imdecode(np.frombuffer(image_bytes, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
-        return json.dumps({"status": "error", "message": "imagem inválida ou corrompida (não decodificável)"})
+        return json.dumps({"status": "error", "message": "invalid or corrupted image, it cannot be decoded"})
 
     t0 = time.perf_counter()
     try:
         dets = _predict(img)
-    except Exception as exc:  # inferência pode falhar por imagem degenerada etc.
-        return json.dumps({"status": "error", "message": f"falha na inferência: {exc}"})
+    except Exception as exc:  # The inference can fail on a degenerate image.
+        return json.dumps({"status": "error", "message": f"inference failed: {exc}"})
     inference_ms = (time.perf_counter() - t0) * 1000.0
 
     out = {"status": "success"}
@@ -300,7 +317,7 @@ def handle(req: str) -> str:
             out["image_format"] = "jpeg"
             out["image_size"] = {"width": int(canvas.shape[1]), "height": int(canvas.shape[0])}
         except Exception as exc:
-            return json.dumps({"status": "error", "message": f"falha na anotação: {exc}"})
+            return json.dumps({"status": "error", "message": f"the annotation failed: {exc}"})
     out["detections"] = _detections_json(out_dets)
     out["inference_ms"] = round(inference_ms, 2)
     return json.dumps(out)

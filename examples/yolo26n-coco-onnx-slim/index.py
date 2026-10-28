@@ -1,16 +1,16 @@
-"""Processo HTTP mínimo esperado pelo watchdog-lite (ADR-0008) — par ONNX.
+"""Minimal HTTP process expected by the watchdog, for the ONNX pair.
 
-Escuta em 127.0.0.1:$PORT (o UPSTREAM_PORT do watchdog-lite) e chama
-`function.handler.handle` a cada POST recebido no socket Unix; o
-`GET /_/ready` responde 503 até o modelo ONNX estar carregado (import +
-sessão ORT + warmup) e 200 depois.
+It listens on 127.0.0.1:$PORT, which is the upstream port of the watchdog,
+and calls the handler of the function package on every post received on the
+Unix socket. The readiness route answers with a rejection until the ONNX
+model is loaded, which covers the import, the session and the warmup, and
+with a success afterwards.
 
-Bind-first + lazy-load: o socket é aberto ANTES do import pesado do
-handler (que cria a sessão ORT uma única vez); o import roda numa thread
-de fundo, seguido de uma inferência dummy de warmup, e só então `_ready`
-é sinalizado — cópia fiel do contrato do par `yolo26n-coco-ncnn-slim`
-(que por sua vez segue o mesmo desenho de boot do `slim_app.py`).
-"""
+Bind first and lazy load: the socket is opened BEFORE the heavy import of
+the handler, which creates the runtime session once. The import runs in a
+background thread, followed by a dummy inference, and only then is the ready
+event signaled. It follows the same boot design as the slim pair of the
+detection example."""
 import json
 import os
 import threading
@@ -21,12 +21,11 @@ _handle = None
 
 
 def _unwrap(body: str) -> str:
-    """Desembrulha o envelope {"input": ...} do agente, se presente.
+    """Unwraps the envelope {"input": ...} of the agent, when it is present.
 
-    O nó posta o input CRU no socket (`internal/nodeapi/invoke_instance.go`:
-    `POST http://faas-instance/` com `json.RawMessage` do input) e o
-    cloud-fallback também manda o input cru; o envelope só aparece em
-    caminhos de teste/manual. `handle()` sempre recebe o input cru.
+    The node posts the raw input on the socket and the cloud fallback also
+    sends the raw input, so the envelope only appears in the manual and test
+    paths. The handler always receives the raw input.
     """
     try:
         data = json.loads(body)
@@ -38,17 +37,18 @@ def _unwrap(body: str) -> str:
 
 
 def _warmup(handle_fn):
-    """Inferência dummy best-effort antes de sinalizar prontidão.
+    """Best effort dummy inference before the readiness is signaled.
 
-    O primeiro forward paga page-in das .so nativas do ORT no primeiro
-    uso; rodar esse custo aqui, ainda com `_ready` desligado, move o
-    platô para dentro do `readiness_ms`: a primeira invocação real paga
-    só warm em vez de readiness + function de cold. Fail-open por
-    desenho: qualquer falha só loga e a prontidão segue — warmup nunca
-    pode travar uma instância saudável.
+    The first forward pays the page-in of the native libraries of the
+    runtime. Paying that cost here, while the ready event is still unset,
+    moves the plateau into the readiness measurement, so the first real
+    invocation pays only the warm path instead of the readiness plus the cold
+    function. It fails open by design: a failure is only logged and the
+    readiness still follows, since the warmup can never block a healthy
+    instance.
     """
     if os.environ.get("SKIP_WARMUP", "").lower() in ("1", "true", "yes"):
-        print("index.py: warmup pulado (SKIP_WARMUP)", flush=True)
+        print("index.py: warmup skipped (SKIP_WARMUP)", flush=True)
         return
     try:
         import base64
@@ -59,14 +59,14 @@ def _warmup(handle_fn):
         img = np.zeros((64, 64, 3), dtype=np.uint8)
         ok, buf = cv2.imencode(".jpg", img)
         if not ok:
-            raise RuntimeError("cv2.imencode falhou no warmup")
+            raise RuntimeError("cv2.imencode failed during the warmup")
         payload = json.dumps(
             {"image_base64": base64.b64encode(buf.tobytes()).decode("utf-8")}
         )
         handle_fn(payload)
         print("index.py: warmup OK", flush=True)
-    except Exception as exc:  # fail-open: loga e segue para _ready
-        print(f"index.py: warmup falhou (fail-open): {exc}", flush=True)
+    except Exception as exc:  # Fail open: log it and signal the readiness.
+        print(f"index.py: warmup failed (fail open): {exc}", flush=True)
 
 
 def _load():
@@ -123,5 +123,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     threading.Thread(target=_load, daemon=True).start()
     port = int(os.environ.get("PORT", "8081"))
-    print(f"index.py: escutando em 127.0.0.1:{port}", flush=True)
+    print(f"index.py: listening on 127.0.0.1:{port}", flush=True)
     HTTPServer(("127.0.0.1", port), Handler).serve_forever()
