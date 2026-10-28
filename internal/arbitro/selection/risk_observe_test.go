@@ -22,7 +22,7 @@ func riskTestEntry(outcome string) history.Entry {
 	}
 }
 
-// TestRiskObsFromEntry cobre cada linha da tabela 6.1.
+// TestRiskObsFromEntry covers every case of the observation table.
 func TestRiskObsFromEntry(t *testing.T) {
 	// A warm success with a known wait gives the net latency, and the sample size is the minimum between the requests in flight and the capacity.
 	o, ok := RiskObsFromEntry(riskTestEntry(history.OutcomeSucesso))
@@ -32,7 +32,8 @@ func TestRiskObsFromEntry(t *testing.T) {
 	if o.LatencyMS != 800 || o.M != 2 {
 		t.Fatalf("warm: lat=%v m=%v want 800/2", o.LatencyMS, o.M)
 	}
-	// Sem AcquireWait + Inflight desconhecido: Beta-only.
+	// Without the acquisition wait and with an unknown number of requests in
+	// flight, only the reliability model is updated.
 	e := riskTestEntry(history.OutcomeSucesso)
 	e.AcquireWaitMS = 0
 	e.Inflight = 0
@@ -49,7 +50,8 @@ func TestRiskObsFromEntry(t *testing.T) {
 	if !ok || o.UseRegr {
 		t.Fatalf("acima-das-instâncias: %+v, want sem regr", o)
 	}
-	// Sem AcquireWait + Inflight dentro da capacidade: regr (sem espera).
+	// Without the acquisition wait and with the requests in flight inside the
+	// capacity, the regression is used, without the wait term.
 	e = riskTestEntry(history.OutcomeSucesso)
 	e.AcquireWaitMS = 0
 	o, ok = RiskObsFromEntry(e)

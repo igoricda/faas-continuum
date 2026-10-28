@@ -1,5 +1,6 @@
-# Deps da imagem slim do ALPR (sem `azure-functions`, sem o host .NET).
-# Mesmo trio de pins do host Functions, menos o `azure-functions`:
+# Dependencies of the slim image of the license plate detector.
+# The same trio of pins that was validated against the detection handler
+# built on torch:
 #   onnxruntime 1.30.0, OpenCV headless 4.10.0.84, numpy 1.26.4.
 onnxruntime==1.30.0
 opencv-python-headless==4.10.0.84

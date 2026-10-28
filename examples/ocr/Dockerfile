@@ -1,28 +1,31 @@
-# Dockerfile da função OCR (leitura da placa) — segue o contrato de
-# execução de função definido na ADR-0008: o processo principal do
-# contêiner é o watchdog-lite (não um shell nem o interpretador Python
-# direto), que sobe FPROCESS uma única vez e faz proxy das invocações
-# recebidas em um socket Unix (sem rede/CNI — ver
-# docs/ADR-0008-contrato-execucao-funcao.md).
+# Dockerfile of the text recognition function, which reads the license
+# plate. The main process of the container is the watchdog, not a shell
+# and not the Python interpreter directly: it starts the function process
+# exactly once and proxies the invocations it receives over a Unix socket,
+# with no network configuration needed.
 #
-# Imagem multi-arquitetura (amd64 + arm64) com o MESMO modelo xs
-# (MODELS.md §1–§2: accuracy igual à do s com runtime muito menor).
-# Stack mínima da MODELS.md §5 ("OCR, server sidecar"): onnxruntime,
-# numpy, opencv-headless — mais fast-plate-ocr (inferência + decode) e
-# pillow. Sem torch, sem tensorflow, sem ultralytics.
+# A multi-architecture image, for amd64 and arm64, with the **same** small
+# model, which reaches the accuracy of the larger variant with a much
+# smaller runtime. The minimal stack is the ONNX runtime, numpy and the
+# headless build of the image library, plus the recognition package, which
+# does the inference and the decoding, and pillow. There is no torch, no
+# tensorflow and no ultralytics.
 #
-# Build multi-stage (mesmo padrão de azure_functions/): o stage builder
-# instala tudo em /home/app/python e limpa caches/pycache; o stage final
-# copia SÓ os pacotes. fast-plate-ocr (deps base: numpy,
-# opencv-headless, pyyaml, rich, tqdm; sem matplotlib/polars) não precisa
-# de remoção de pacotes.
+# Multi stage build: the builder stage installs everything under
+# /home/app/python and cleans the caches and the compiled files; the final
+# stage copies **only** the packages. The recognition package depends on
+# numpy, on the headless build of the image library, on the YAML parser,
+# on the progress bars and on the progress bars themselves, without the
+# plotting and the dataframe packages, so no package has to be removed.
 #
-# Build (a partir da raiz do repositório, para ter acesso a cmd/watchdog-lite):
-#   GOOS=linux GOARCH=amd64 go build -o examples/ocr/watchdog-lite ./cmd/watchdog-lite
+# Build, from the root of the repository:
+#   GOOS=linux GOARCH=amd64 go build -o examples/ocr/watchdog-lite-amd64 ./cmd/watchdog-lite
+#   GOOS=linux GOARCH=arm64 go build -o examples/ocr/watchdog-lite-arm64 ./cmd/watchdog-lite
 #   docker buildx build --platform linux/amd64,linux/arm64 \
 #     -t faas-continuum/ocr:latest -f examples/ocr/Dockerfile examples/ocr
 #
-# Variante GPU (servidor com CUDA): trocar o pacote do ORT no build:
+# The GPU variant, for a server with CUDA, swaps the package of the runtime
+# at build time:
 #   docker buildx build --build-arg ONNXRUNTIME_PKG=onnxruntime-gpu ...
 
 FROM --platform=${TARGETPLATFORM:-linux/amd64} python:3.11-slim AS builder
@@ -35,9 +38,10 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /home/app/
 
 COPY function/requirements.txt function/requirements.txt
-# requirements.txt fixa o ORT CPU; o ARG ONNXRUNTIME_PKG permite trocar
-# por onnxruntime-gpu na variante CUDA — por isso o ORT sai da lista
-# aqui e entra pelo ARG (default = o mesmo pin do requirements.txt).
+# The requirements file pins the CPU build of the runtime, and the build
+# argument allows swapping it for the GPU build in the CUDA variant, which
+# is why the runtime is removed from the list here and installed through
+# the argument, whose default is the same pin of the requirements file.
 RUN grep -v '^onnxruntime' function/requirements.txt > /tmp/ocr-req.txt \
     && uv pip install --no-cache --system --target=/home/app/python -r /tmp/ocr-req.txt \
     && uv pip install --no-cache --system --target=/home/app/python "$ONNXRUNTIME_PKG" \
@@ -57,7 +61,8 @@ FROM --platform=${TARGETPLATFORM:-linux/amd64} python:3.11-slim
 
 ARG TARGETARCH
 
-# libgl1/libglib2.0-0: exigidos pelo OpenCV headless em algumas bases slim.
+# The toolkit and the OpenGL library are required by the headless build of
+# the image library in some of the slim base images.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -66,27 +71,29 @@ RUN groupadd app && useradd -r -g app app
 
 WORKDIR /home/app/
 
-# O binário do watchdog-lite é compilado FORA do Docker (cross-compile
-# Go trivial, ver ADR-0001) e só copiado aqui — não precisa de uma stage
-# de build Go dentro da imagem da função. Como esta imagem é
-# multi-arquitetura, há um binário por arch (TARGETARCH é automático do
-# buildx: amd64/arm64) — ver "Preparar" no README.
+# The watchdog binary is built outside Docker, since cross compiling Go is
+# trivial, and it is only copied here: the image of the function does not
+# need a build stage for Go inside it. Since this image is multi
+# architecture, there is one binary per architecture, and the build
+# argument of the builder is set automatically by the builder, with amd64
+# and arm64. See "Prepare" in the README.
 COPY watchdog-lite-$TARGETARCH /usr/bin/watchdog-lite
 RUN chmod +x /usr/bin/watchdog-lite
 
-# Só os pacotes já instalados e limpos no builder — sem uv, sem caches.
+# Only the packages already installed and cleaned in the builder, without
+# the installer and the caches.
 COPY --from=builder /home/app/python /home/app/python
 
 COPY index.py .
 COPY function/ function/
 
-# Modelo xs finetuned (3.2 MB) + config da placa — ver "Preparar" no README.
+# The fine tuned small model, 3.2 MB, and the configuration of the plate.
 COPY best.onnx .
 COPY cct_xs_v2_global_plate_config.yaml .
 
-# IMPORTANTE: todo diretório em que o processo da função precisa
-# escrever depois de USER app precisa estar nesta lista (lição do
-# alpr: falhar aqui é silencioso até rodar como não-root).
+# IMPORTANT: every directory that the process of the function has to write
+# to after the unprivileged user is in effect has to be in this list. A
+# missing entry is silent until the container runs as an unprivileged user.
 RUN mkdir -p /run/faas-continuum-socket && \
     chown -R app:app /home/app /run/faas-continuum-socket
 
@@ -96,21 +103,23 @@ ENV PATH=$PATH:/home/app/python/bin/
 ENV PYTHONPATH=/home/app/python:/home/app
 ENV MODEL_PATH=/home/app/best.onnx
 ENV CONFIG_PATH=/home/app/cct_xs_v2_global_plate_config.yaml
-# Núcleos do ONNX Runtime (0 = padrão do ORT; 4 é o valor validado no ARM).
+# The cores used by the ONNX runtime, where zero means the default of the
+# runtime and four is the value validated on ARM.
 ENV ORT_THREADS=0
 
-# Contrato da ADR-0008: FPROCESS é o comando que o watchdog-lite sobe
-# uma única vez; UPSTREAM_PORT é o loopback interno entre watchdog-lite
-# e este processo; SOCKET_PATH é onde o agente monta o socket Unix de
-# invocação via bind mount (o agente decide o valor real na hora de
-# provisionar — este é só o padrão para execução standalone/manual).
+# The execution contract: the function process is the command that the
+# watchdog starts exactly once, the upstream port is the loopback between
+# the watchdog and this process, and the socket path is where the node
+# agent mounts the Unix socket of the invocations with a bind mount. The
+# agent decides the real value during the provisioning, so this one is
+# only the default for a standalone run.
 ENV FPROCESS="python3 index.py"
 ENV UPSTREAM_PORT=8081
 ENV SOCKET_PATH=/run/faas-continuum-socket/handle.sock
 
-# O cold import aqui (cv2/onnxruntime/fast-plate-ocr) é de segundos, não
-# dezenas de segundos como torch/ultralytics — 90s é margem confortável
-# inclusive em disco lento de borda.
+# The cold import here, of the image library, of the runtime and of the
+# recognition package, takes seconds and not tens of seconds, so ninety
+# seconds is a comfortable margin even on a slow edge storage.
 ENV READY_TIMEOUT=90s
 
 CMD ["watchdog-lite"]

@@ -1,5 +1,5 @@
 // Command simulador runs the Arbiter offline against mocked nodes, which
-// lets a recorded invocation log be replayed without access to the lab
+// lets a recorded invocation log be replayed without any hardware
 // hardware.
 //
 // Usage:

@@ -97,12 +97,11 @@ func MaxBucket(a, b string) string {
 
 // SegmentKey produces the primary key of the history, which is the group,
 // the node and the maximum bucket, with null separators against collisions.
-// This is an authorized break of the format: files persisted without the
-// version marker are rejected by the constructor with a fail-closed error
-// that points to the migration tool, since the previous note that the
-// operator would simply remove the file was revoked. A file of the previous
-// version decodes a zero pressure at the level of the entry, with a
-// tolerant decoding, but the file without the marker does not load.
+// The format is strict: a file persisted without the version marker is
+// rejected by the constructor with a fail-closed error that points to the
+// migration tool. A file of the previous version decodes a zero pressure at
+// the level of the entry, with a tolerant decoding, but the file without the
+// marker does not load.
 func SegmentKey(group, nodeID string, sc ScenarioContext) string {
 	b := segKeyPool.Get().(*strings.Builder)
 	b.Grow(len(group) + len(nodeID) + len(sc.LoadBucket) + 2)

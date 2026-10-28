@@ -121,7 +121,7 @@ func TestRankNodes(t *testing.T) {
 		}
 		latest := map[string]telemetry.Package{
 			"nevoa1": {CPUUsagePct: 5},
-			"borda1": {CPUUsagePct: 90}, // cpu maior mas borda vence
+			"borda1": {CPUUsagePct: 90}, // the higher CPU load, but the edge wins
 		}
 		// High limits avoid filtering by overload in the ordering test.
 		cfg := LimitsConfig{MaxCPUPct: 100, MaxMemPct: 100, MaxPSIAvg10: 100}

@@ -1,53 +1,59 @@
-# Exemplo: função ALPR borda (YOLO26-OBB via ncnn)
+# Example: edge license plate detection function (YOLO26-OBB through ncnn)
 
-Primeiro estágio do pipeline ALPR na borda contra o contrato da
-ADR-0008 (`docs/ADR-0008-contrato-execucao-funcao.md`). Recebe a imagem
-da cena e devolve as coordenadas da(s) placa(s) em JSON. É o par de
-borda do [`alpr`](../alpr) (servidor): mesma entrada e mesma saída, só
-muda o backend do detector (ncnn em vez de torch/CUDA).
+The first stage of the license plate pipeline at the edge. It receives the
+image of the scene and returns the coordinates of the plates as JSON. It is
+the edge counterpart of the [server example](../alpr), with the same input
+and the same output and only a different backend for the detector, ncnn
+instead of torch with CUDA.
 
-## Modelo (MODELS.md §2)
+## Model
 
-`best_ncnn_model/` (`model.ncnn.bin` + `model.ncnn.param`, 4.8 MB +
-28 KB) — mesmos pesos do `best.pt`, exportados para ncnn em
-`imgsz=640`. No ARM (4× Cortex-A55, `threads=4`): mAP50 0.995 /
-mAP50-95 0.984 (vs 0.989 do export em 1280); infer ~222 ms/imagem no
-val e ~270 ms por invocação (~4× mais rápido que o export em 1280 e
-~11× que torch CPU no mesmo ARM).
+`best_ncnn_model/`, with the weights and the parameters of the network, 4.8
+MB and 28 KB. They are the same weights of the checkpoint of the server
+example, exported to ncnn with an image size of 640. On ARM, with four
+Cortex-A55 cores and four threads, the mean average precision at the
+threshold of 0.5 is 0.995 and at the threshold of 0.95 it is 0.984, against
+0.989 for the export with an image size of 1280. The inference takes about
+222 ms per image in the validation and about 270 ms per invocation, which is
+about four times faster than the export with an image size of 1280 and about
+eleven times faster than the CPU backend of torch on the same ARM host.
 
-Fora de escopo de propósito (MODELS.md §4): TFLite (mAP 0.0) e OCR via
-ncnn (colapso do eixo de tokens) — o OCR na borda é ONNX Runtime, na
-função [`ocr`](../ocr).
+Out of scope on purpose: the TFLite backend, which reaches a mean average
+precision of zero, and the text recognition through ncnn, which collapses
+the axis of the tokens. The text recognition at the edge uses the ONNX
+runtime, in the [`ocr`](../ocr) example.
 
-## Contrato de Prontidão (ADR-0008, Emenda 2026-09-14, §3)
+## Readiness contract
 
-O `index.py` implementa **bind-first + lazy-load** (mesmo padrão do
-alpr/hello-world):
+The `index.py` implements **bind first and lazy load**, the same pattern as
+the other examples:
 
-- `HTTPServer` faz `bind` em `127.0.0.1:$PORT` **antes** de importar
-  `function.handler` (onde o modelo ncnn é carregado uma única vez).
-- Thread daemon carrega `handle()` e sinaliza `threading.Event _ready`.
-- **GET `/_/ready`**: `200 {"ready": true}` se pronto, `503` caso contrário.
-- **POST `/_/ready`**: **sempre `404`**.
-- **POST `/`**: `503` enquanto carrega, `200` + JSON válido após `_ready`.
-- **GET desconhecido**: `404`.
+- The HTTP server binds `127.0.0.1:$PORT` **before** importing
+  `function.handler`, where the model is loaded once.
+- A daemon thread loads `handle()` and signals the `threading.Event` named
+  `_ready`.
+- **GET `/_/ready`**: `200 {"ready": true}` when ready and `503` otherwise.
+- **POST `/_/ready`**: **always `404`**.
+- **POST `/`**: `503` while loading and `200` with a valid JSON body after
+  the ready event.
+- **Unknown GET**: `404`.
 
-## Estrutura
+## Structure
 
 ```
-handler.py -> function/handler.py   # handle(req): modelo carregado 1x, chamado por invocação
-index.py                            # servidor HTTP mínimo esperado pelo watchdog-lite
-function/requirements.txt           # ultralytics==8.4.153 + ncnn + numpy<2 (torch+cpu no Dockerfile)
-best_ncnn_model/                   # model.ncnn.bin + model.ncnn.param (ver "Preparar" abaixo)
-Dockerfile                          # imagem final SOMENTE arm64, com watchdog-lite como principal
+function/handler.py   # handle(req): the model is loaded once and called on every invocation
+index.py              # the minimal HTTP server expected by the watchdog
+function/requirements.txt  # ultralytics==8.4.153 + ncnn + numpy<2 (torch with the CPU build comes from the Dockerfile)
+best_ncnn_model/      # the weights and the parameters of the network (see "Prepare" below)
+Dockerfile            # the final arm64 only image, with the watchdog as the main process
 ```
 
-## Preparar
+## Prepare
 
 ```bash
-# a partir do treino musgd_def no repo LPR — o export fixa o shape de
-# entrada (640), então o IMAGE_SIZE do handler/Dockerfile precisa
-# coincidir com o imgsz do export:
+# from the root of the repository — the export freezes the input shape at
+# 640, so the image size of the handler and of the Dockerfile has to match
+# the image size of the export:
 yolo export task=obb model=runs/obb/musgd_def/weights/best.pt \
   format=ncnn imgsz=640 quantize=16
 mkdir -p examples/alpr-ncnn/best_ncnn_model
@@ -55,15 +61,16 @@ cp runs/obb/musgd_def_640/weights/best_ncnn_model/model.ncnn.bin \
    runs/obb/musgd_def_640/weights/best_ncnn_model/model.ncnn.param \
    runs/obb/musgd_def_640/weights/best_ncnn_model/metadata.yaml \
    examples/alpr-ncnn/best_ncnn_model/
-# metadata.yaml (task=obb, classe License-plate, imgsz 640) — OBRIGATÓRIO
-# junto ao bin/param: sem ele o ultralytics carrega 999 classes genéricas
-# e a detecção zera (verificado no Pi em 2026-09-19).
+# The metadata file, with the task, the class and the image size, is
+# MANDATORY next to the weights and the parameters: without it the
+# ultralytics runtime loads a thousand generic classes and the detection
+# reaches zero.
 
-# compilar o watchdog-lite para a TVBox (arm64)
+# build the watchdog for the ARM host (arm64)
 GOOS=linux GOARCH=arm64 go build -o examples/alpr-ncnn/watchdog-lite ./cmd/watchdog-lite
 ```
 
-## Build e teste com Docker
+## Build and test with Docker
 
 ```bash
 cd examples/alpr-ncnn
@@ -73,21 +80,21 @@ docker run --rm -d --name alpr-ncnn-test \
   faas-continuum/alpr-ncnn:latest
 ```
 
-## Publicar (registry `igoricda`)
+## Publish
 
-Tags publicadas: `docker.io/igoricda/alpr-ncnn:640` e `:latest` (mesmo
-digest). Build **nativo na TVBox** (cross via qemu é lento); o contexto
-precisa do `watchdog-lite` arm64 (`GOOS=linux GOARCH=arm64 go build
--o examples/alpr-ncnn/watchdog-lite ./cmd/watchdog-lite`).
+The published tags are `docker.io/igoricda/alpr-ncnn:640` and `:latest`,
+which point to the same digest. The build has to run **natively on the ARM
+host**, since a cross build through the emulation of another architecture
+is slow, and the context has to contain the arm64 watchdog, built with
+`GOOS=linux GOARCH=arm64 go build -o examples/alpr-ncnn/watchdog-lite
+./cmd/watchdog-lite`.
 
-Na TVBox via agente (min_instances=1): primeira invocação ~63 s
-(readiness 29 s + primeira inferência, com push concorrente no box),
-quente ~315 ms/imagem (medido 2026-09-23).
-
-# monta o payload (imagem em base64) e invoca via socket Unix montado
+```bash
+# build the payload (the image in base64) and invoke it over the mounted
+# Unix socket
 python3 -c "
 import base64, json
-b64 = base64.b64encode(open('/caminho/para/uma/foto/de/placa.jpg','rb').read()).decode()
+b64 = base64.b64encode(open('/path/to/a/photo/of/a/plate.jpg','rb').read()).decode()
 print(json.dumps({'image_base64': b64}))
 " > /tmp/payload.json
 
@@ -97,15 +104,15 @@ curl -s --unix-socket /tmp/alpr-ncnn-sockets/handle.sock http://localhost/ -d @/
 #      "rotation_rad": ..}}]}
 ```
 
-Invocação via agente: o nó espera o envelope `{"input": ...}`
-(modelo-dados-schemas.md §5) e repassa só o conteúdo de `input` à
-função — sem o envelope, `handle()` recebe corpo vazio e devolve
-`{"status": "error", ...}`:
+Invocation through the node agent: the node expects the envelope
+`{"input": ...}` and forwards only the content of `input` to the function.
+Without the envelope, `handle()` receives an empty body and answers with
+`{"status": "error", ...}`.
 
 ```bash
 python3 -c "
 import base64, json
-b64 = base64.b64encode(open('/caminho/para/uma/foto/de/placa.jpg','rb').read()).decode()
+b64 = base64.b64encode(open('/path/to/a/photo/of/a/plate.jpg','rb').read()).decode()
 print(json.dumps({'input': {'image_base64': b64}}))
 " > /tmp/invoke.json
 
@@ -114,24 +121,24 @@ curl -s -X POST "$BASE_AGENTE/function/alpr-ncnn/invoke" \
   -d @/tmp/invoke.json
 ```
 
-Limiar de confiança e tamanho de inferência saem de variáveis de
-ambiente (`CONFIDENCE_THRESHOLD=0.25`, `IMAGE_SIZE=640` — o validado,
-igual ao imgsz do export).
+The confidence threshold and the inference size come from environment
+variables (`CONFIDENCE_THRESHOLD=0.25` and `IMAGE_SIZE=640`, which is the
+validated one and matches the image size of the export).
 
-## Registro no agente (timeout por função)
+## Registration on the node agent (timeout per function)
 
-O cold import no ARM lento + `ENV READY_TIMEOUT=90s` pedem teto próprio
-de 120s (mesma regra do alpr: margem 30s ≥ max(10s, 20% de 90s);
-`docs/config.md` e ADR-0008 Emenda 2026-09-14). Note que a inferência
-ncnn em 640 leva ~270 ms/imagem na TVBox — o `timeout_ms` abaixo cobre
-isso com folga para invocações isoladas:
+The cold import on a slow ARM host, together with the `READY_TIMEOUT=90s`
+of the image, calls for a ceiling of its own of 120 seconds, with the same
+margin of thirty seconds of the server example. The inference through ncnn
+with an image size of 640 takes about 270 ms per image on the ARM host, so
+the ceiling below covers it with room to spare for isolated invocations:
 
 ```bash
 curl -i -X POST "$BASE_AGENTE/function/alpr-ncnn" \
-  -H "Authorization: $ADMIN_NÓ" -H "Content-Type: application/json" -d '{
+  -H "Authorization: $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{
     "image_ref": "faas-continuum/alpr-ncnn:latest",
     "min_instances": 1,
     "timeout_ms": 120000
   }'
-# 201 → {"function":{...},"invoke_token":"..."}  GUARDE o invoke_token!
+# 201 -> {"function":{...},"invoke_token":"..."}  KEEP THE INVOKE TOKEN!
 ```

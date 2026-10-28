@@ -28,7 +28,7 @@ type fakeRuntime struct {
 	removed     []string
 	adopted     []string
 	listErr     error
-	failInspect map[string]bool // instanceID -> AdoptExisting deve falhar
+	failInspect map[string]bool // instanceID -> AdoptExisting must fail
 }
 
 func newFakeRuntime() *fakeRuntime {

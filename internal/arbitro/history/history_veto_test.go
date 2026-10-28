@@ -55,8 +55,9 @@ func TestStatsAndRecentWindowedP95AndRate(t *testing.T) {
 	mk := func(ts time.Time, outcome string, lat int64) Entry {
 		return Entry{FunctionName: "fn", NodeID: "n1", Timestamp: ts, ScenarioContext: sc, ObservedLatencyMS: lat, Outcome: outcome}
 	}
-	// 2 sucessos stale (fora da janela de 60s) + 1 sucesso fresco 100ms +
-	// 5 falhas frescas + 1 timeout fresco + 3 orcamento_excedido frescos.
+	// Two stale successes, outside the sixty second window, plus one fresh
+	// success of 100 ms, five fresh failures, one fresh timeout and three fresh
+	// exceeded budgets.
 	for i := 0; i < 2; i++ {
 		if err := h.AppendWithGroup(mk(now.Add(-time.Hour), OutcomeSucesso, 10), "fn"); err != nil {
 			t.Fatalf("AppendWithGroup: %v", err)

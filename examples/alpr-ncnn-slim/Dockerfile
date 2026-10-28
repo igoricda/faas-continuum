@@ -1,18 +1,21 @@
-# Dockerfile da função ALPR borda slim (detecção via ncnn direto) — segue
-# o contrato de execução de função definido na ADR-0008: o processo
-# principal do contêiner é o watchdog-lite, que sobe FPROCESS uma única
-# vez e faz proxy das invocações recebidas em um socket Unix (sem
-# rede/CNI — ver docs/ADR-0008-contrato-execucao-funcao.md).
+# Dockerfile of the slim edge license plate detection function, with the
+# direct ncnn backend. The main process of the container is the watchdog,
+# which starts the function process exactly once and proxies the
+# invocations it receives over a Unix socket, with no network
+# configuration needed.
 #
-# Par slim de examples/alpr-ncnn: mesmo modelo (best_ncnn_model,
-# imgsz=640), mesma saída JSON, mas SEM torch/ultralytics — só ncnn +
-# numpy + opencv-headless. O export ncnn já traz o decode embutido no
-# grafo, então o handler replica letterbox + NMS-probiou em numpy com
-# paridade bit-exata (ver README). Sem o elefante do torch, o cold no
-# ARM cai da casa dos 60 s para a casa dos ~10 s (projetado — a
-# confirmar na primeira medição no box).
+# Slim counterpart of the edge example: the same model, the directory
+# `best_ncnn_model` exported with an image size of 640, and the same JSON
+# output, but **without torch and without ultralytics**, with only ncnn,
+# numpy and the headless build of opencv. The ncnn export already carries
+# the decoding inside the graph, so the handler replicates the letterbox
+# and the suppression with the probabilistic intersection over union in
+# numpy, with a bit exact parity against the handler built on the
+# ultralytics runtime. Without the weight of torch, the cold start on ARM
+# falls from about 60 seconds to about 10 seconds, which is a projection
+# and has to be confirmed by the first measurement on the host.
 #
-# Build (a partir da raiz do repositório, para ter acesso a cmd/watchdog-lite):
+# Build, from the root of the repository:
 #   GOOS=linux GOARCH=arm64 go build -o examples/alpr-ncnn-slim/watchdog-lite ./cmd/watchdog-lite
 #   docker buildx build --platform linux/arm64 \
 #     -t faas-continuum/alpr-ncnn-slim:latest -f examples/alpr-ncnn-slim/Dockerfile examples/alpr-ncnn-slim
@@ -32,8 +35,7 @@ RUN uv pip install --no-cache --system --target=/home/app/python \
 
 FROM --platform=linux/arm64 python:3.11-slim
 
-# Pacotes de sistema exigidos pelo OpenCV headless — mesmo conjunto do
-# template OpenFaaS original.
+# The system packages required by the headless build of the image library.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -42,24 +44,25 @@ RUN groupadd app && useradd -r -g app app
 
 WORKDIR /home/app/
 
-# O binário do watchdog-lite é compilado FORA do Docker (cross-compile
-# Go trivial, ver ADR-0001) e só copiado aqui — não precisa de uma stage
-# de build Go dentro da imagem da função.
+# The watchdog binary is built outside Docker, since cross compiling Go
+# is trivial, and it is only copied here: the image of the function does
+# not need a build stage for Go inside it.
 COPY watchdog-lite /usr/bin/watchdog-lite
 RUN chmod +x /usr/bin/watchdog-lite
 
-# Só os pacotes já instalados e limpos no builder — sem uv, sem caches.
+# Only the packages already installed and cleaned in the builder, without
+# the installer and the caches.
 COPY --from=builder /home/app/python /home/app/python
 
 COPY index.py .
 COPY function/ function/
 
-# Detector ncnn exportado em imgsz=640 (model.ncnn.bin + model.ncnn.param
-# + metadata.yaml) — mesmo trio do alpr-ncnn.
+# The ncnn detector exported with an image size of 640, with the weights,
+# the parameters and the metadata, the same trio as the edge example.
 COPY best_ncnn_model/ best_ncnn_model/
 
-# IMPORTANTE: todo diretório em que o processo da função precisa
-# escrever depois de USER app precisa estar nesta lista.
+# IMPORTANT: every directory that the process of the function has to write
+# to after the unprivileged user is in effect has to be in this list.
 RUN mkdir -p /run/faas-continuum-socket /tmp/Ultralytics && \
     chown -R app:app /home/app /run/faas-continuum-socket /tmp/Ultralytics
 
@@ -73,17 +76,20 @@ ENV IMAGE_SIZE=640
 ENV IOU_THRESHOLD=0.7
 ENV MAX_DET=300
 
-# Contrato da ADR-0008: FPROCESS é o comando que o watchdog-lite sobe
-# uma única vez; UPSTREAM_PORT é o loopback interno entre watchdog-lite
-# e este processo; SOCKET_PATH é onde o agente monta o socket Unix de
-# invocação via bind mount (o agente decide o valor real na hora de
-# provisionar — este é só o padrão para execução standalone/manual).
+# The execution contract: the function process is the command that the
+# watchdog starts exactly once, the upstream port is the loopback between
+# the watchdog and this process, and the socket path is where the node
+# agent mounts the Unix socket of the invocations with a bind mount. The
+# agent decides the real value during the provisioning, so this one is
+# only the default for a standalone run.
 ENV FPROCESS="python3 index.py"
 ENV UPSTREAM_PORT=8081
 ENV SOCKET_PATH=/run/faas-continuum-socket/handle.sock
 
-# Sem torch/ultralytics o cold import é ordens de grandeza menor que os
-# 90s do alpr-ncnn — 60s dá margem folgada (recalibrar na medição).
+# Without torch and without the ultralytics runtime the cold import is
+# orders of magnitude smaller than the 90 seconds of the edge example, so
+# 60 seconds gives plenty of margin. It has to be recalibrated after the
+# measurement.
 ENV READY_TIMEOUT=60s
 
 CMD ["watchdog-lite"]

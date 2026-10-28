@@ -104,8 +104,9 @@ func TestPSIVetoWiring(t *testing.T) {
 	})
 
 	t.Run("monitor-sem-psi-zero-vetos", func(t *testing.T) {
-		// Compat: telemetria sem campos PSI (modo antigo) => PSIVetoFull
-		// fail-open => nenhum veto; o de CPU menor lidera normalmente.
+		// Compatibility: telemetry without the PSI fields, the old mode, makes
+		// PSIVetoFull fail open, so no node is vetoed and the one with the
+		// lower CPU load leads normally.
 		mon := vetoMonitor(now,
 			map[string][2]float64{"a": {0, 0}, "b": {0, 0}},
 			map[string]float64{"a": 10, "b": 50})

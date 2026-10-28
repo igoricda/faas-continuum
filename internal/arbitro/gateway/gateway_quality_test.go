@@ -1,9 +1,9 @@
 package gateway
 
-// Table tests do roteamento por qualidade (expected-metrics-slo-routing,
-// todo 4): variante qualificante servida sem header, miss servido com
-// header + SloMet=false, 400 em domain_metrics malformado, 503 preservado
-// sem host, nil SLO no caminho verbatim.
+// Table tests of the routing by quality: a qualifying variant is served
+// without the header, a miss is served with the header and SloMet false, a
+// malformed domain_metrics yields 400, a missing host preserves the 503 and
+// a nil SLO goes through the path verbatim.
 
 import (
 	"encoding/json"

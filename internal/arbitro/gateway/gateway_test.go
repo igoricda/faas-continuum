@@ -153,7 +153,7 @@ func TestGateway_NodeUnavailable(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	host := hostFromURL(t, srv.URL)
-	srv.Close() // fecha antes do invoke
+	srv.Close() // closed before the invocation
 
 	ns, _ := nodes.NewNodeStore("")
 	_, _ = ns.Upsert(nodes.Node{NodeID: "n1", Layer: nodes.LayerBorda, Host: host})

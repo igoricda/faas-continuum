@@ -182,7 +182,7 @@ func classifyOutcome(err error) string {
 	// to end, with the transport and the HTTP layer wrapping the timeout
 	// and the exceeded budget in every path of the handler, which would
 	// allow removing this fallback and the timeout error above without
-	// breaking the matrix of the audit.
+	// breaking the classification matrix.
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "deadline exceeded") || strings.Contains(lower, "context canceled") || strings.Contains(lower, "timeout") {
 		return history.OutcomeTimeout

@@ -177,8 +177,8 @@ func (g *Gateway) dispatchAttempts(w http.ResponseWriter, req InvocationRequest,
 		// logs that it was seeded with the value it used. The projection
 		// consumes the seed exactly like a measured value, without an
 		// alternative branch, and the line is what distinguishes a seed
-		// from a measurement in the audit. It only happens with a seed,
-		// and the measured path stays byte for byte the same.
+		// from a measurement. It only happens with a seed, and the measured
+		// path stays byte for byte the same.
 		if ownSeeded {
 			log.Printf("arbitro: gateway dispatch nó %s function=%s cost_seeded=true ownCost=%.2f", target.NodeID, req.Function, ownCost)
 		}

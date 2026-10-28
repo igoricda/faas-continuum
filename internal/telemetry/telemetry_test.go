@@ -973,7 +973,7 @@ func TestReporterSurvivesMonitorErrors(t *testing.T) {
 		close(done)
 	}()
 
-	time.Sleep(80 * time.Millisecond) // ~4 ticks, todos com 500
+	time.Sleep(80 * time.Millisecond) // about four ticks, all of them with 500
 	cancel()
 	select {
 	case <-done:

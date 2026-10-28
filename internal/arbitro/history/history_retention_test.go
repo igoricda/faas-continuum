@@ -143,7 +143,8 @@ func TestLoadAppliesRetentionAndRewritesFile(t *testing.T) {
 	if !ok || count != 1 || total != 1 {
 		t.Fatalf("Stats pós-load=%d/%d ok=%v, want 1/1 (antiga fora)", count, total, ok)
 	}
-	// O load marca dirty: o primeiro flush reescreve o arquivo sem a antiga.
+	// The load marks the file dirty: the first flush rewrites it without the
+	// stale entry.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		if data, err := os.ReadFile(path); err == nil {

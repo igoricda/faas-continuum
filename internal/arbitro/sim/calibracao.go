@@ -1,5 +1,5 @@
 // Package sim builds an offline bench of the arbiter to validate the model
-// before the lab: the edge, fog and cloud nodes are mocked HTTP servers whose
+// without any hardware: the edge, fog and cloud nodes are mocked HTTP servers whose
 // latencies, budget censoring, cold start and saturation come from real
 // session data, while the gateway, the selectors, the history and the monitor
 // are the production code and only the wire of the nodes is mocked.

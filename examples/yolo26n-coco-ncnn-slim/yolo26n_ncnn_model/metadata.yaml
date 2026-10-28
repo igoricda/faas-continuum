@@ -1,6 +1,5 @@
-description: Ultralytics YOLO26n model trained on /home/lq/codes/ultralytics/ultralytics/cfg/datasets/coco.yaml
+description: Ultralytics YOLO26n model trained on data.yaml
 author: Ultralytics
-date: '2026-09-28T21:03:31.394020-03:00'
 version: 8.4.153
 license: AGPL-3.0 License (https://ultralytics.com/license)
 docs: https://docs.ultralytics.com

@@ -92,7 +92,7 @@ func TestThroughputDecoupled(t *testing.T) {
 		if apt, ok := (ThroughputCriterion{}).Segment(nil, rich); ok || apt {
 			t.Fatalf("Segment com slo nil deveria ser (false,false), obteve (%v,%v)", apt, ok)
 		}
-		// Com declarado, comportamento de antes, intacto.
+		// With the objective declared, the previous behavior is preserved.
 		decl := &SLO{MaxLatencyMS: 5000, MinThroughputRPS: 2}
 		if apt, ok := (ThroughputCriterion{}).Segment(decl, SegmentStats{Count: 0, RecentRPS: 9}); ok || apt {
 			t.Fatalf("Count==0 deveria ser (false,false), obteve (%v,%v)", apt, ok)

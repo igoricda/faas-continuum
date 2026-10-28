@@ -1,82 +1,84 @@
-# Exemplo: função ALPR servidor (YOLO26-OBB, modelo completo)
+# Example: server license plate detection function (YOLO26-OBB, full model)
 
-Primeiro estágio do pipeline ALPR na cloud contra o contrato da
-ADR-0008 (`docs/ADR-0008-contrato-execucao-funcao.md`). Recebe a imagem
-da cena e devolve as coordenadas da(s) placa(s) em JSON. É o par
-servidor do [`alpr-ncnn`](../alpr-ncnn) (borda ARM): mesma entrada e
-mesma saída, só muda o backend do detector.
+The first stage of the license plate pipeline in the cloud. It receives the
+image of the scene and returns the coordinates of the plates as JSON. It is
+the server counterpart of the [edge example](../alpr-ncnn): the input and the
+output are the same and only the backend of the detector changes.
 
 ## Tags
 
-| Tag | Torch | Tamanho | Quando usar |
+| Tag | Torch | Size | When to use |
 |---|---|---|---|
-| `igoricda/alpr:latest` (= `:gpu`) | CUDA (PyPI default, ~6 GB de `nvidia-*`) | ~12 GB | servidor **com** GPU |
-| `igoricda/alpr:cpu` (`Dockerfile.cpu`) | +cpu (índice CPU do PyTorch) | ~2.5 GB | servidor **sem** GPU (pull muito menor, mesma saída) |
+| `igoricda/alpr:latest` (= `:gpu`) | CUDA (the default of PyPI, about 6 GB of `nvidia-*` packages) | about 12 GB | a server **with** a GPU |
+| `igoricda/alpr:cpu` (`Dockerfile.cpu`) | the CPU build of PyTorch | about 2.5 GB | a server **without** a GPU (a much smaller pull, with the same output) |
 
-Tamanhos medidos 2026-09-23 (multistage sem matplotlib/polars; o grosso
-é o torch: CUDA ~10 GB, +cpu ~2 GB).
+The `:latest` tag is the GPU variant: with a visible GPU the Torch runtime
+uses CUDA and without one it falls back to the CPU automatically. On a host
+with the NVIDIA Container Toolkit, register the function with `"gpu": true`
+(see below) to inject the driver into the container; without it the runtime
+only sees the CPU even when the host has a GPU.
 
-O `:latest` é a variante GPU: com GPU visível o torch usa CUDA, sem
-GPU cai para CPU automaticamente. Em host com NVIDIA Container Toolkit,
-registre com `"gpu": true` (ver abaixo) para injetar o driver no
-contêiner — sem isso o torch enxerga só CPU mesmo com GPU no host.
+## Model
 
-## Modelo (MODELS.md §1)
+`best.pt` — YOLO26n-OBB, 5.9 MB, with the single class `License-plate`,
+through the ultralytics runtime and the CUDA backend of torch. The
+detection runs with an image size of 1280, which was validated with a
+precision of 1.0, a recall of 1.0, a mean average precision at the
+threshold of 0.5 of 0.995 and of 0.989 at the threshold of 0.95.
 
-`musgd_def/weights/best.pt` — YOLO26n-OBB, 5.9 MB, classe única
-`License-plate`, via ultralytics 8.4.153 + torch (CUDA). Detecção em
-`imgsz=1280` (`yolo val task=obb`: **P 1.0 / R 1.0 / mAP50 0.995 /
-mAP50-95 0.989**).
+## Readiness contract
 
-## Contrato de Prontidão (ADR-0008, Emenda 2026-09-14, §3)
+The `index.py` implements **bind first and lazy load**, the same pattern as
+the other examples:
 
-O `index.py` implementa **bind-first + lazy-load** (mesmo padrão do
-alpr/hello-world):
+- The HTTP server binds `127.0.0.1:$PORT` **before** importing
+  `function.handler`, where the model is loaded once.
+- A daemon thread loads `handle()` and signals the `threading.Event` named
+  `_ready`.
+- **GET `/_/ready`**: `200 {"ready": true}` when ready and `503` otherwise.
+- **POST `/_/ready`**: **always `404`**.
+- **POST `/`**: `503` while loading and `200` with a valid JSON body after
+  the ready event.
+- **Unknown GET**: `404`.
 
-- `HTTPServer` faz `bind` em `127.0.0.1:$PORT` **antes** de importar
-  `function.handler` (onde o modelo YOLO é carregado uma única vez).
-- Thread daemon carrega `handle()` e sinaliza `threading.Event _ready`.
-- **GET `/_/ready`**: `200 {"ready": true}` se pronto, `503` caso contrário.
-- **POST `/_/ready`**: **sempre `404`**.
-- **POST `/`**: `503` enquanto carrega, `200` + JSON válido após `_ready`.
-- **GET desconhecido**: `404`.
-
-## Estrutura
+## Structure
 
 ```
-handler.py -> function/handler.py   # handle(req): modelo carregado 1x, chamado por invocação
-index.py                            # servidor HTTP mínimo esperado pelo watchdog-lite
-function/requirements.txt           # ultralytics==8.4.153 + numpy (torch/CUDA via dependência)
-best.pt                             # pesos do modelo (ver "Preparar" abaixo)
-Dockerfile                          # imagem final amd64, com watchdog-lite como processo principal
+function/handler.py   # handle(req): the model is loaded once and called on every invocation
+index.py              # the minimal HTTP server expected by the watchdog
+function/requirements.txt  # ultralytics==8.4.153 + numpy (torch and CUDA come with the dependency)
+best.pt               # the weights of the model (see "Prepare" below)
+Dockerfile            # the final amd64 image, with the watchdog as the main process
 ```
 
-## Preparar
+## Prepare
 
 ```bash
-# a partir da raiz do repositório
+# from the root of the repository
 curl -L -o examples/alpr/best.pt \
   https://github.com/igoricda/alpr-yolo-models/raw/refs/heads/main/musgd_def/weights/best.pt
 
-# compilar o watchdog-lite para o servidor (amd64)
+# build the watchdog for the server (amd64)
 GOOS=linux GOARCH=amd64 go build -o examples/alpr/watchdog-lite ./cmd/watchdog-lite
 ```
 
-## Build e teste com Docker
+## Build and test with Docker
 
 ```bash
 cd examples/alpr
 docker build --platform linux/amd64 -t igoricda/alpr:gpu .
 
-# com GPU (o torch da imagem já vem com CUDA; sem --gpus cai para CPU):
+# with a GPU (the runtime of the image already comes with CUDA; without the
+# flag it falls back to the CPU):
 docker run --rm -d --name alpr-test --gpus all \
   -v /tmp/alpr-sockets:/run/faas-continuum-socket \
   faas-continuum/alpr:latest
 
-# monta o payload (imagem em base64) e invoca via socket Unix montado
+# build the payload (the image in base64) and invoke it over the mounted
+# Unix socket
 python3 -c "
 import base64, json
-b64 = base64.b64encode(open('/caminho/para/uma/foto/de/placa.jpg','rb').read()).decode()
+b64 = base64.b64encode(open('/path/to/a/photo/of/a/plate.jpg','rb').read()).decode()
 print(json.dumps({'image_base64': b64}))
 " > /tmp/payload.json
 
@@ -86,15 +88,15 @@ curl -s --unix-socket /tmp/alpr-sockets/handle.sock http://localhost/ -d @/tmp/p
 #      "rotation_rad": ..}}]}
 ```
 
-Invocação via agente: o nó espera o envelope `{"input": ...}`
-(modelo-dados-schemas.md §5) e repassa só o conteúdo de `input` à
-função — sem o envelope, `handle()` recebe corpo vazio e devolve
-`{"status": "error", ...}`:
+Invocation through the node agent: the node expects the envelope
+`{"input": ...}` and forwards only the content of `input` to the function.
+Without the envelope, `handle()` receives an empty body and answers with
+`{"status": "error", ...}`.
 
 ```bash
 python3 -c "
 import base64, json
-b64 = base64.b64encode(open('/caminho/para/uma/foto/de/placa.jpg','rb').read()).decode()
+b64 = base64.b64encode(open('/path/to/a/photo/of/a/plate.jpg','rb').read()).decode()
 print(json.dumps({'input': {'image_base64': b64}}))
 " > /tmp/invoke.json
 
@@ -103,34 +105,38 @@ curl -s -X POST "$BASE_AGENTE/function/alpr/invoke" \
   -d @/tmp/invoke.json
 ```
 
-Limiar de confiança e tamanho de inferência saem de variáveis de
-ambiente (`CONFIDENCE_THRESHOLD=0.25`, `IMAGE_SIZE=1280` — o validado).
+The confidence threshold and the inference size come from environment
+variables (`CONFIDENCE_THRESHOLD=0.25` and `IMAGE_SIZE=1280`, which is the
+validated one).
 
-## Registro no agente (timeout por função)
+## Registration on the node agent (timeout per function)
 
-O cold import `torch`/`ultralytics` (30–60s) cabe no default 90s do nó,
-mas esse default zera a margem contra o `ENV READY_TIMEOUT=90s` deste
-Dockerfile — registre a função com teto próprio de 120s (margem 30s ≥
-max(10s, 20% de 90s); regra em `docs/config.md` e ADR-0008 Emenda 2026-09-14):
+The cold import of torch and of the ultralytics runtime takes 30 to 60
+seconds, which fits in the default ceiling of 90 seconds of the node, but
+that default leaves no margin against the `READY_TIMEOUT=90s` of this
+Dockerfile. Register the function with a ceiling of its own of 120 seconds,
+which leaves a margin of 30 seconds, the larger of ten seconds and twenty
+percent of the ceiling:
 
 ```bash
 curl -i -X POST "$BASE_AGENTE/function/alpr" \
-  -H "Authorization: $ADMIN_NÓ" -H "Content-Type: application/json" -d '{
+  -H "Authorization: $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{
     "image_ref": "faas-continuum/alpr:latest",
     "min_instances": 1,
     "timeout_ms": 120000
   }'
-# 201 → {"function":{...},"invoke_token":"..."}  GUARDE o invoke_token!
+# 201 -> {"function":{...},"invoke_token":"..."}  KEEP THE INVOKE TOKEN!
 ```
 
-Variante com GPU (host com driver NVIDIA + Container Toolkit
-instalado): aponte para a tag `:gpu` (ou `:latest`) e passe
-`"gpu": true` — o agente injeta o hook prestart da NVIDIA e
-`NVIDIA_VISIBLE_DEVICES=all` no contêiner (default `false` = CPU-only):
+The GPU variant, on a host with the NVIDIA driver and the Container
+Toolkit installed, points to the `:gpu` or `:latest` tag and passes
+`"gpu": true`. The agent injects the prestart hook of NVIDIA and the
+variable that exposes every device to the container; the default is CPU
+only:
 
 ```bash
 curl -i -X POST "$BASE_AGENTE/function/alpr-gpu" \
-  -H "Authorization: $ADMIN_NÓ" -H "Content-Type: application/json" -d '{
+  -H "Authorization: $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{
     "image_ref": "igoricda/alpr:gpu",
     "min_instances": 1,
     "timeout_ms": 120000,
@@ -138,5 +144,5 @@ curl -i -X POST "$BASE_AGENTE/function/alpr-gpu" \
   }'
 ```
 
-Variante sem GPU (pull ~1 GB em vez de ~6 GB): `igoricda/alpr:cpu`,
-sem `"gpu"`.
+The variant without a GPU, with a pull of about one gigabyte instead of
+about six, is `igoricda/alpr:cpu` without the `"gpu"` field.

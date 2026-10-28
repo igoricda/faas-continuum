@@ -1,4 +1,5 @@
-# Contexto mínimo do build: código + requirements + modelo ncnn + watchdog arm64.
+# Minimal build context: the code, the requirements, the ncnn model
+# and the arm64 watchdog.
 __pycache__/
 *.pyc
 *.pyo

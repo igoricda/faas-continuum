@@ -1,5 +1,6 @@
-# Contexto mínimo do build: código + requirements + modelo + watchdog do arch.
-# (O Dockerfile.cpu e o Dockerfile partilham este contexto.)
+# Minimal build context: the code, the requirements, the model and the
+# watchdog of the architecture.
+# (The Dockerfile and the Dockerfile.cpu share this context.)
 __pycache__/
 *.pyc
 *.pyo

@@ -226,9 +226,8 @@ func PosteriorPSICurve(prior PSICurve, priorOK bool, local []PSIPoint) (PSICurve
 }
 
 // FitPSICurveFromEntries fits over history Entries with PSI supplied by the
-// caller through psiOf — the seam todo 5 wires once Entry carries
-// PSICpuSomeAvg10/PSIMemFullAvg10 (then: psiOf = func(e Entry)
-// (float64, float64) { return e.PSICpuSomeAvg10, e.PSIMemFullAvg10 }).
+// caller through psiOf, which is the accessor that reads
+// PSICpuSomeAvg10 and PSIMemFullAvg10 from the Entry.
 // The solo-only + PSI>0 gate still applies inside FitPSICurve. nil psiOf
 // is fail-closed (ok=false).
 func FitPSICurveFromEntries(entries []Entry, psiOf func(Entry) (cpuSome, memFull float64)) (PSICurve, bool) {

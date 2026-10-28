@@ -1,38 +1,43 @@
-# ALPR na névoa — backend ONNX Runtime (faas-continuum, amd64)
+# License plate detection in the fog, with the ONNX Runtime backend
 
-Detector de placa (classe única `License-plate`, OBB probiou) para nós
-**x86** (névoa, ex. `ccsc-lscdesktop6`), seguindo o contrato de execução
-da ADR-0008 como os demais exemplos: `watchdog-lite` é o PID 1, sobe o
-`FPROCESS` e faz proxy reverso HTTP das invocações pelo socket Unix.
+The license plate detector, with the single class `License-plate` and an
+oriented box, for an **x86** host, following the same execution contract as
+the other examples: the watchdog is the process with identifier one, it
+starts the function process and it proxies the invocations in reverse over
+the Unix socket.
 
-Família ALPR:
+The family of the license plate examples:
 
-| Exemplo / imagem | Backend | Nó-alvo |
+| Example | Backend | Target host |
 |---|---|---|
-| `examples/alpr` | torch + ultralytics | GPU/servidor |
-| `examples/alpr-ncnn-slim` | ncnn | borda ARM (TVBox) |
-| `azure_functions/alpr` (slim ACA) | onnxruntime | nuvem (Container Apps) |
-| **este** | onnxruntime | névoa x86 (.94) |
+| `examples/alpr` | torch and the ultralytics runtime | a server with a GPU |
+| `examples/alpr-ncnn-slim` | ncnn | an ARM edge host |
+| `examples/alpr-onnx-slim` | the ONNX runtime | an x86 host |
 
-O handler é o **mesmo** de `azure_functions/alpr` (paridade com o handler
-torch já validada: mesmo N/classe/rank, conf ±0.002, OBB ±1px em 5
-imagens). Aqui só muda o envelope de execução local: `index.py`
-(loopback do watchdog-lite, `/_/ready` + warmup + `_unwrap`) e a imagem
-com `watchdog-lite` embutido, sem o host do Azure Functions.
+The handler is a port of the handler of the ncnn slim example, whose parity
+against the handler built on torch was already validated, with the same
+number of detections, the same classes and the same ranking, a confidence
+within two thousandths and an oriented box within one pixel over five
+images. What changes here is only the envelope of the local execution: the
+HTTP process with the loopback of the watchdog, the readiness route and the
+warmup, and the image with the watchdog built in.
 
-## Entrada / saída (contrato da ADR-0008)
+## Input and output
 
 ```jsonc
-// entrada (input cru do nó; {"input": ...} também é aceito)
-{"image_base64": "<jpg ou png em base64>"}
+// The input is the raw one of the node; the envelope {"input": ...} is
+// also accepted.
+{"image_base64": "<jpg or png in base64>"}
 
-// saída
+// The output
 {"status": "success", "detections": [{"class": "License-plate",
   "confidence": 0.9, "obb": {"x": 0, "y": 0, "w": 0, "h": 0, "rotation_rad": 0}}]}
 {"status": "error", "message": "..."}
 ```
 
-## Build (a partir da raiz do repositório)
+## Build
+
+From the root of the repository:
 
 ```sh
 GOOS=linux GOARCH=amd64 go build -o examples/alpr-onnx-slim/watchdog-lite ./cmd/watchdog-lite
@@ -41,24 +46,27 @@ docker buildx build --platform linux/amd64 \
   -f examples/alpr-onnx-slim/Dockerfile examples/alpr-onnx-slim
 ```
 
-`watchdog-lite` é gitignored (`/examples/*/watchdog-lite`) — cada
-checkout gera o seu.
+The watchdog binary is built outside the image, for the architecture of the
+target host, and it is ignored by Git with the pattern
+`/examples/*/watchdog-lite`, so every checkout has to build its own.
 
-## Smoke local (sem agente)
+## Local smoke test, without the node agent
 
 ```sh
 mkdir -p /tmp/sock && chmod 777 /tmp/sock
 docker run -d --name alpr-smoke -v /tmp/sock:/run/faas-continuum-socket \
   igoricda/alpr-onnx-slim:latest
-# POST de azure_functions/testdata/alpr-payload.json no socket:
-#   /run/faas-continuum-socket/handle.sock  (ver clientes dos outros exemplos)
+# POST the payload over the socket:
+#   /run/faas-continuum-socket/handle.sock
 ```
 
-## Deploy no nó (quando o caso ALPR rodar)
+## Deployment on the node
 
-1. Registrar a função no agente (nome sugerido `alpr`, categoria `lpr`)
-   com `timeout_ms`/`idle_timeout` do experimento;
-2. incluir `"alpr":"lpr"` no `-function-categories` do agente (o nó
-   anuncia a categoria ao Árbitro);
-3. `ctr -n faas-continuum images pull docker.io/igoricda/alpr-onnx-slim:latest`
-   (pre-pull opcional) e reiniciar o agente para reler o registry.
+1. Register the function on the node agent, with the suggested name `alpr`
+   and the category `lpr`, and with the timeout and the idle timeout of the
+   workload.
+2. Include `"alpr":"lpr"` in the `-function-categories` of the agent, so
+   that the node announces the category to the arbiter.
+3. Optionally pull the image ahead of time with
+   `ctr -n faas-continuum images pull docker.io/igoricda/alpr-onnx-slim:latest`
+   and restart the agent so that it reads the registry again.

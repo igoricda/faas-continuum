@@ -64,7 +64,8 @@ func TestForEachEntryChronological(t *testing.T) {
 		e.Timestamp = at
 		return e
 	}
-	// Append fora de ordem temporal: o armazenamento segue a ordem de append.
+	// An append out of chronological order: the storage keeps the order of the
+	// appends.
 	if err := h.AppendWithGroup(mk(300, base.Add(3*time.Second)), "g2"); err != nil {
 		t.Fatal(err)
 	}

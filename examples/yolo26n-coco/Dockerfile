@@ -1,31 +1,34 @@
-# Dockerfile da função de detecção YOLO26n COCO (servidor amd64) — segue
-# o contrato de execução de função definido na ADR-0008: o processo
-# principal do contêiner é o watchdog-lite (não um shell nem o
-# interpretador Python direto), que sobe FPROCESS uma única vez e faz
-# proxy das invocações recebidas em um socket Unix (sem rede/CNI — ver
-# docs/ADR-0008-contrato-execucao-funcao.md).
+# Dockerfile of the YOLO26n COCO detection function, for an amd64 server.
+# The main process of the container is the watchdog, not a shell and not
+# the Python interpreter directly: it starts the function process exactly
+# once and proxies the invocations it receives over a Unix socket, with no
+# network configuration needed.
 #
-# Imagem amd64 com o modelo **default do ultralytics, pré-treinado no
-# COCO** (yolo26n.pt, 5,3 MB, 80 classes) via ultralytics 8.4.153 + torch
-# (CUDA via pip default) + numpy. É o par servidor do
-# examples/yolo26n-coco-ncnn-slim (borda ARM): mesma entrada, mesma saída
-# JSON (imagem anotada em base64 + detecções), só muda o backend.
+# An amd64 image with the **default weights of the ultralytics runtime,
+# pre-trained on COCO**, the nano model of 5.3 MB with eighty classes,
+# through the ultralytics runtime with torch, and CUDA through the default
+# of PyPI, plus numpy. It is the server counterpart of the slim edge
+# example: the same input, the same JSON output, with the annotated image
+# in base64 and the detections, and only a different backend.
 #
-# Build multi-stage (mesmo padrão do examples/alpr): o stage builder
-# instala tudo em /home/app/python e remove matplotlib/polars (+ deps
-# exclusivas deles), caches e pycache; o stage final copia SÓ os
-# pacotes. matplotlib/polars são Requires-Dist do ultralytics, mas todos
-# os imports deles no ultralytics são lazy (plotting, benchmarks,
-# callbacks, trainer) — o caminho quente (import + inferência .pt +
-# anotação com cv2) não os usa. O torch CUDA + nvidia-* ficam (são o
-# runtime da GPU).
+# Multi stage build, the same pattern as the license plate example: the
+# builder stage installs everything under /home/app/python and removes the
+# plotting and the dataframe packages, with their exclusive dependencies,
+# the caches and the compiled files; the final stage copies **only** the
+# packages. The plotting and the dataframe packages are declared
+# dependencies of the ultralytics runtime, but every import of them inside
+# it is lazy, in the plotting, in the benchmarks, in the callbacks and in
+# the trainer, so the hot path, which is the import, the inference and the
+# annotation, does not use them. The CUDA build of torch and the driver
+# packages stay, since they are the runtime of the GPU.
 #
-# Build (a partir da raiz do repositório, para ter acesso a cmd/watchdog-lite):
+# Build, from the root of the repository:
 #   GOOS=linux GOARCH=amd64 go build -o examples/yolo26n-coco/watchdog-lite ./cmd/watchdog-lite
 #   docker build --platform linux/amd64 -t faas-continuum/yolo26n-coco:latest \
 #     -f examples/yolo26n-coco/Dockerfile examples/yolo26n-coco
 #
-# Variante sem GPU (torch +cpu, imagem bem menor): Dockerfile.cpu.
+# The variant without a GPU, with the CPU build of torch and a much smaller
+# image, is Dockerfile.cpu.
 
 FROM --platform=linux/amd64 python:3.11-slim AS builder
 
@@ -34,8 +37,9 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /home/app/
 
 COPY function/requirements.txt function/requirements.txt
-# ultralytics puxa o torch com CUDA (wheels do PyPI default) — em host
-# sem GPU o mesmo torch roda em CPU; com GPU, subir com --gpus all.
+# The ultralytics runtime pulls the CUDA build of torch, from the default
+# wheels of PyPI. On a host without a GPU the same torch runs on the CPU;
+# with a GPU, start the container with the flag that exposes it.
 RUN uv pip install --no-cache --system --target=/home/app/python -r function/requirements.txt \
   && rm -rf /home/app/python/matplotlib /home/app/python/mpl_toolkits /home/app/python/pylab.py \
       /home/app/python/polars /home/app/python/_polars_runtime_32 \
@@ -51,9 +55,9 @@ RUN uv pip install --no-cache --system --target=/home/app/python -r function/req
 
 FROM --platform=linux/amd64 python:3.11-slim
 
-# Pacotes de sistema exigidos pelo OpenCV (dependência do ultralytics,
-# usada também pelo handler para decodificar/anotar) — mesmo conjunto do
-# template OpenFaaS original.
+# The system packages required by the image library, which is a dependency
+# of the ultralytics runtime and is also used by the handler to decode
+# and to annotate.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -62,27 +66,28 @@ RUN groupadd app && useradd -r -g app app
 
 WORKDIR /home/app/
 
-# O binário do watchdog-lite é compilado FORA do Docker (cross-compile
-# Go trivial, ver ADR-0001) e só copiado aqui — não precisa de uma stage
-# de build Go dentro da imagem da função.
+# The watchdog binary is built outside Docker, since cross compiling Go is
+# trivial, and it is only copied here: the image of the function does not
+# need a build stage for Go inside it.
 COPY watchdog-lite /usr/bin/watchdog-lite
 RUN chmod +x /usr/bin/watchdog-lite
 
-# Só os pacotes já instalados e limpos no builder — sem uv, sem caches,
-# sem matplotlib/polars.
+# Only the packages already installed and cleaned in the builder, without
+# the installer, the caches and the plotting packages.
 COPY --from=builder /home/app/python /home/app/python
 
 COPY index.py .
 COPY function/ function/
 
-# Pesos default do YOLO26n no COCO (ver "Preparar" no README).
+# The default weights of the YOLO26n model on COCO. See "Prepare" in the
+# README.
 COPY yolo26n.pt .
 
-# IMPORTANTE: todo diretório em que o processo da função precisa
-# escrever depois de USER app precisa estar nesta lista — inclui
-# /tmp/Ultralytics (config do ultralytics, YOLO_CONFIG_DIR abaixo), não
-# só /home/app e o socket. Faltar um item aqui é silencioso até rodar
-# como usuário não-root (lição registrada no README do alpr).
+# IMPORTANT: every directory that the process of the function has to write
+# to after the unprivileged user is in effect has to be in this list. It
+# includes the configuration directory of the ultralytics runtime, and not
+# only the home directory and the socket. A missing entry is silent until
+# the container runs as an unprivileged user.
 RUN mkdir -p /run/faas-continuum-socket /tmp/Ultralytics && \
     chown -R app:app /home/app /run/faas-continuum-socket /tmp/Ultralytics
 
@@ -93,31 +98,35 @@ ENV PYTHONPATH=/home/app/python:/home/app
 ENV YOLO_CONFIG_DIR=/tmp/Ultralytics
 ENV YOLO_VERBOSE=False
 ENV MODEL_PATH=/home/app/yolo26n.pt
-# Defaults do ultralytics (DEFAULT_CFG) — todos sobrescritíveis por env.
+# The defaults of the ultralytics runtime, all of them overridable through
+# the environment.
 ENV CONFIDENCE_THRESHOLD=0.25
 ENV IOU_THRESHOLD=0.7
 ENV MAX_DET=300
 ENV IMAGE_SIZE=640
-# ANNOTATE=0 devolve só as detecções; ANNOTATE_MAX_SIDE>0 reduz a imagem
-# anotada (e as coordenadas) para caber no teto de saída do nó (8 MiB).
+# With the annotation disabled the answer carries only the detections; with
+# a positive maximum side the annotated image, and the coordinates with
+# it, is reduced to fit the output ceiling of the node, of eight mebibytes.
 ENV ANNOTATE=1
 ENV JPEG_QUALITY=85
 ENV ANNOTATE_MAX_SIDE=0
 
-# Contrato da ADR-0008: FPROCESS é o comando que o watchdog-lite sobe
-# uma única vez; UPSTREAM_PORT é o loopback interno entre watchdog-lite
-# e este processo; SOCKET_PATH é onde o agente monta o socket Unix de
-# invocação via bind mount (o agente decide o valor real na hora de
-# provisionar — este é só o padrão para execução standalone/manual).
+# The execution contract: the function process is the command that the
+# watchdog starts exactly once, the upstream port is the loopback between
+# the watchdog and this process, and the socket path is where the node
+# agent mounts the Unix socket of the invocations with a bind mount. The
+# agent decides the real value during the provisioning, so this one is
+# only the default for a standalone run.
 ENV FPROCESS="python3 index.py"
 ENV UPSTREAM_PORT=8081
 ENV SOCKET_PATH=/run/faas-continuum-socket/handle.sock
 
-# torch/ultralytics são conhecidos por levar 30-60s no primeiro import a
-# frio (carregamento de bibliotecas nativas, sem relação com o tamanho
-# do modelo em si). O padrão do watchdog-lite (30s) fica exatamente no
-# limite desse pior caso — 90s dá margem confortável sem mascarar uma
-# falha real de subida.
+# Torch and the ultralytics runtime are known to take thirty to sixty
+# seconds on the first cold import, since the native libraries have to be
+# loaded, and that has nothing to do with the size of the model itself.
+# The default of the watchdog of thirty seconds sits exactly at the limit
+# of that worst case, so ninety seconds gives a comfortable margin without
+# masking a real failure of the startup.
 ENV READY_TIMEOUT=90s
 
 CMD ["watchdog-lite"]

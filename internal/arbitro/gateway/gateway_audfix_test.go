@@ -1,11 +1,10 @@
 package gateway
 
-// Regression group of the gateway from the audit: the arbiter timeout against
-// the function timeout, the liveness against the success, the absence of
-// attempts mapping to a timeout, the visible fan-out, the injectable clock in
-// the handler, the fail-fast of a bad request, the retryability of the root
-// cause in the cloud and the ceiling of the invocation log. Each test anchors
-// one scenario of the audit.
+// Regression group of the gateway: the arbiter timeout against the function
+// timeout, the liveness against the success, the absence of attempts mapping
+// to a timeout, the visible fan-out, the injectable clock in the handler, the
+// fail-fast of a bad request, the retryability of the root cause in the cloud
+// and the ceiling of the invocation log.
 
 import (
 	"context"
@@ -352,7 +351,7 @@ func TestAuditFix_InvocationLogMetricsCap(t *testing.T) {
 	if len(data) > 70*1024 {
 		t.Fatalf("linha com %d bytes, esperado ~64KiB", len(data))
 	}
-	// Dentro do teto passa verbatim.
+	// Under the ceiling it passes verbatim.
 	small := json.RawMessage(`{"a":1}`)
 	if got := truncateMetrics(small); string(got) != string(small) {
 		t.Fatalf("metrics pequena alterada: %s", got)

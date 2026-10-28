@@ -1,5 +1,5 @@
-// Pooled PSI pressure-curve estimator with bounded gen-guarded cache
-// (selflearning-telemetry-seeded-history, todo 9).
+// Pooled PSI pressure-curve estimator with a bounded generation-guarded
+// cache.
 //
 // This file is the STATEFUL shell around the pure estimator in psi_curve.go
 // (FitPSICurve, PosteriorPSICurve, ShrinkToPrior, FitPSICurveFromEntries,
@@ -29,12 +29,12 @@
 // pair — appends by sibling nodes that move the prior do NOT invalidate
 // this pair's entry (same trade-off class as a pooled read under a
 // per-pair gen; the next append to this pair, or window/time-guard expiry,
-// refreshes). Todos 10/11/13 callers query per candidate node, and every
+// refreshes). The callers query per candidate node, and every
 // candidate's own ingest path appends to its pair, so hot candidates
 // refresh continuously.
 //
-// PSI sourcing: exclusively through psiOfEntry (the one-liner seam todo 2
-// anticipated: e.PSICpuSomeAvg10 / e.PSIMemFullAvg10, 0 = unknown). The
+// PSI sourcing: exclusively through psiOfEntry, the accessor that reads
+// e.PSICpuSomeAvg10 and e.PSIMemFullAvg10, where 0 means unknown. The
 // scan pre-filter (psiSoloEligible) matches PSIPoint.eligible() EXACTLY —
 // solo-only gate plus PSI>0 on both axes — so it never pre-filters
 // differently from the gate inside FitPSICurve (which re-gates
@@ -46,8 +46,8 @@ import (
 	"time"
 )
 
-// psiOfEntry is the todo-2 accessor seam wired to the real Entry PSI
-// fields (todo 5): cpu_some.avg10 and mem_full.avg10, 0 = unknown.
+// psiOfEntry is the accessor wired to the real Entry PSI fields,
+// cpu_some.avg10 and mem_full.avg10, where 0 means unknown.
 func psiOfEntry(e Entry) (cpuSome, memFull float64) {
 	return e.PSICpuSomeAvg10, e.PSIMemFullAvg10
 }
@@ -115,7 +115,7 @@ type psiCacheEntry struct {
 //
 // Served through the bounded gen-guarded psiCache (see header): stable
 // data with frozen now is O(1); the miss path is one windowed scan in the
-// ExpectedCost shape. Stable signature — the seam todos 10/11/13 call.
+// ExpectedCost shape. Stable signature, which the callers rely on.
 func (h *History) PSICurveFor(group, nodeID, layer string, window time.Duration, now time.Time) (PSICurve, bool) {
 	if h == nil || window <= 0 {
 		return PSICurve{}, false

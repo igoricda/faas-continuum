@@ -1,6 +1,5 @@
-// Contract tests for observed node cpu/mem ingestion
-// (selflearning-telemetry-seeded-history, usage-curve fallback): the
-// dispatch-time pkg.CPUUsagePct/MemoryUsagePct ride attemptCapture into
+// Contract tests for observed node cpu/mem ingestion, the usage-curve
+// fallback: the dispatch-time pkg.CPUUsagePct/MemoryUsagePct ride attemptCapture into
 // history.Entry.ObservedCPUPct/ObservedMemPct + liveRef, and the late path
 // inherits via single take or falls back (corpo > mon.Latest > 0).
 // Mirrors psi_contract_test.go + TestLatePSI; 0 = unknown on every axis.

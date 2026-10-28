@@ -1,27 +1,30 @@
-# Dockerfile da função ALPR borda (detecção via ncnn) — segue o contrato
-# de execução de função definido na ADR-0008: o processo principal do
-# contêiner é o watchdog-lite (não um shell nem o interpretador Python
-# direto), que sobe FPROCESS uma única vez e faz proxy das invocações
-# recebidas em um socket Unix (sem rede/CNI — ver
-# docs/ADR-0008-contrato-execucao-funcao.md).
+# Dockerfile of the edge license plate detection function, with the ncnn
+# backend. The main process of the container is the watchdog, not a shell
+# and not the Python interpreter directly: it starts the function process
+# exactly once and proxies the invocations it receives over a Unix socket,
+# with no network configuration needed.
 #
-# Imagem SOMENTE arm64 para as TVBoxes com o detector ncnn (MODELS.md
-# §2 e §5, "Detector + OCR, edge (ARM, unified)"): ultralytics 8.4.153 +
-# ncnn 1.0.20260526 + numpy<2, com torch +cpu (o torch do PyPI para
-# aarch64 arrasta GBs de nvidia-* — ver MODELS.md §6). O export ncnn é
-# em imgsz=640 (mAP50 0.995 / mAP50-95 0.984, infer ~222 ms em 4×
-# Cortex-A55 — ~4× mais rápido que o export em 1280). É o par de borda
-# do alpr (servidor): mesma entrada e mesma saída JSON, só muda o backend.
+# An arm64 only image for the ARM hosts with the ncnn detector: the
+# ultralytics runtime with ncnn and numpy below the version two, together
+# with the CPU build of torch, since the default build of torch for
+# aarch64 drags gigabytes of driver packages that are useless here. The
+# ncnn export uses an image size of 640, with a mean average precision at
+# the threshold of 0.5 of 0.995 and at the threshold of 0.95 of 0.984 and
+# an inference of about 222 ms on four Cortex-A55 cores, which is about
+# four times faster than the export with an image size of 1280. It is the
+# edge counterpart of the server example, with the same input and the same
+# JSON output and only a different backend.
 #
-# Build multi-stage (mesmo padrão de azure_functions/): o stage builder
-# instala tudo em /home/app/python e remove matplotlib/polars (+ deps
-# exclusivas deles), caches e pycache; o stage final copia SÓ os
-# pacotes. matplotlib/polars são Requires-Dist do ultralytics, mas todos
-# os imports deles no ultralytics são lazy (plotting, benchmarks,
-# callbacks, trainer) — o caminho quente (import + inferência ncnn) não
-# os usa.
+# Multi stage build: the builder stage installs everything under
+# /home/app/python and removes the plotting and the dataframe packages,
+# with their exclusive dependencies, the caches and the compiled files;
+# the final stage copies **only** the packages. The plotting and the
+# dataframe packages are declared dependencies of the ultralytics runtime,
+# but every import of them inside it is lazy, in the plotting, in the
+# benchmarks, in the callbacks and in the trainer, so the hot path, which
+# is the import and the inference, does not use them.
 #
-# Build (a partir da raiz do repositório, para ter acesso a cmd/watchdog-lite):
+# Build, from the root of the repository:
 #   GOOS=linux GOARCH=arm64 go build -o examples/alpr-ncnn/watchdog-lite ./cmd/watchdog-lite
 #   docker buildx build --platform linux/arm64 \
 #     -t faas-continuum/alpr-ncnn:latest -f examples/alpr-ncnn/Dockerfile examples/alpr-ncnn
@@ -33,12 +36,12 @@ COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 WORKDIR /home/app/
 
 COPY function/requirements.txt function/requirements.txt
-# Ordem e comando único importam: torch +cpu PRIMEIRO, a partir do
-# índice CPU do PyTorch — o torch do PyPI para aarch64 puxa GBs de
-# pacotes nvidia-* (CUDA) inúteis na TVBox. Instalação em UM único
-# comando: com --target o resolvedor não enxerga o diretório alvo como
-# "já satisfeito", então um segundo install reinstalaria torch CUDA por
-# cima do +cpu.
+# The order and the single command matter: the CPU build of torch comes
+# FIRST, from the CPU index of PyTorch, since the default build of torch
+# for aarch64 pulls gigabytes of driver packages that are useless on an
+# ARM host. The installation happens in a SINGLE command: with a target
+# directory the resolver does not see it as already satisfied, so a second
+# install would put the CUDA build of torch back on top of the CPU one.
 RUN uv pip install --no-cache --system --target=/home/app/python \
       --extra-index-url https://download.pytorch.org/whl/cpu \
       torch==2.14.0+cpu torchvision==0.29.0+cpu \
@@ -57,8 +60,8 @@ RUN uv pip install --no-cache --system --target=/home/app/python \
 
 FROM --platform=linux/arm64 python:3.11-slim
 
-# Pacotes de sistema exigidos pelo OpenCV (usado internamente pelo
-# ultralytics) — mesmo conjunto do template OpenFaaS original.
+# The system packages required by the image library, which the ultralytics
+# runtime uses internally.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates libglib2.0-0 libgl1 \
     && rm -rf /var/lib/apt/lists/*
@@ -67,30 +70,31 @@ RUN groupadd app && useradd -r -g app app
 
 WORKDIR /home/app/
 
-# O binário do watchdog-lite é compilado FORA do Docker (cross-compile
-# Go trivial, ver ADR-0001) e só copiado aqui — não precisa de uma stage
-# de build Go dentro da imagem da função.
+# The watchdog binary is built outside Docker, since cross compiling Go
+# is trivial, and it is only copied here: the image of the function does
+# not need a build stage for Go inside it.
 COPY watchdog-lite /usr/bin/watchdog-lite
 RUN chmod +x /usr/bin/watchdog-lite
 
-# Só os pacotes já instalados e limpos no builder — sem uv, sem caches,
-# sem matplotlib/polars.
+# Only the packages already installed and cleaned in the builder, without
+# the installer, the caches and the plotting packages.
 COPY --from=builder /home/app/python /home/app/python
 
 COPY index.py .
 COPY function/ function/
 
-# Detector ncnn exportado em imgsz=640 (model.ncnn.bin + model.ncnn.param
-# + metadata.yaml — sem o metadata o ultralytics não sabe que a task é
-# obb nem o nome da classe e carrega 999 classes genéricas, zerando as
-# detecções) — ver "Preparar" no README.
+# The ncnn detector exported with an image size of 640, with the weights,
+# the parameters and the metadata. Without the metadata the ultralytics
+# runtime does not know that the task is the oriented one and does not
+# know the name of the class, so it loads a thousand generic classes and
+# the detections reach zero.
 COPY best_ncnn_model/ best_ncnn_model/
 
-# IMPORTANTE: todo diretório em que o processo da função precisa
-# escrever depois de USER app precisa estar nesta lista — inclui
-# /tmp/Ultralytics (config do ultralytics, YOLO_CONFIG_DIR abaixo), não
-# só /home/app e o socket. Faltar um item aqui é silencioso até rodar
-# como usuário não-root (lição registrada no README do alpr).
+# IMPORTANT: every directory that the process of the function has to write
+# to after the unprivileged user is in effect has to be in this list. It
+# includes the configuration directory of the ultralytics runtime, and not
+# only the home directory and the socket. A missing entry is silent until
+# the container runs as an unprivileged user.
 RUN mkdir -p /run/faas-continuum-socket /tmp/Ultralytics && \
     chown -R app:app /home/app /run/faas-continuum-socket /tmp/Ultralytics
 
@@ -104,20 +108,22 @@ ENV MODEL_PATH=/home/app/best_ncnn_model
 ENV CONFIDENCE_THRESHOLD=0.25
 ENV IMAGE_SIZE=640
 
-# Contrato da ADR-0008: FPROCESS é o comando que o watchdog-lite sobe
-# uma única vez; UPSTREAM_PORT é o loopback interno entre watchdog-lite
-# e este processo; SOCKET_PATH é onde o agente monta o socket Unix de
-# invocação via bind mount (o agente decide o valor real na hora de
-# provisionar — este é só o padrão para execução standalone/manual).
+# The execution contract: the function process is the command that the
+# watchdog starts exactly once, the upstream port is the loopback between
+# the watchdog and this process, and the socket path is where the node
+# agent mounts the Unix socket of the invocations with a bind mount. The
+# agent decides the real value during the provisioning, so this one is
+# only the default for a standalone run.
 ENV FPROCESS="python3 index.py"
 ENV UPSTREAM_PORT=8081
 ENV SOCKET_PATH=/run/faas-continuum-socket/handle.sock
 
-# O cold import do ultralytics/ncnn no ARM lento estoura fácil o padrão
-# de 30s do watchdog-lite — 90s dá margem sem mascarar falha real.
-# Na TVBox, a inferência ncnn em 640 leva ~270 ms/imagem (MODELS.md §2),
-# então o timeout de registro no agente precisa cobrir isso com folga
-# (ver README).
+# The cold import of the ultralytics runtime and of ncnn on a slow ARM
+# host easily exceeds the default of 30 seconds of the watchdog, so 90
+# seconds gives margin without masking a real failure. On the ARM host the
+# inference through ncnn with an image size of 640 takes about 270 ms per
+# image, so the timeout of the registration on the agent has to cover it
+# with room to spare.
 ENV READY_TIMEOUT=90s
 
 CMD ["watchdog-lite"]

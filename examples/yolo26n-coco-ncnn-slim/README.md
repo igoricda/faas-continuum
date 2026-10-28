@@ -1,135 +1,138 @@
-# Exemplo: função de detecção YOLO26n COCO na borda (ncnn slim, sem torch)
+# Example: YOLO26n COCO detection function at the edge (slim ncnn, without torch)
 
-Par **arm64** de [`yolo26n-coco`](../yolo26n-coco) (servidor amd64)
-contra o contrato da ADR-0008
-(`docs/ADR-0008-contrato-execucao-funcao.md`): **mesma entrada, mesma
-saída JSON e mesmos pesos** (o `yolo26n.pt` do COCO exportado para ncnn) —
-mas **sem torch/ultralytics**: só `ncnn` + `numpy` + `opencv-headless`
-(`function/requirements.txt`), num `python:3.11-slim`.
+The **arm64** counterpart of the [amd64 example](../yolo26n-coco): the same
+input, the same JSON output and the same weights, the default checkpoint of
+COCO exported to ncnn, but **without torch and without ultralytics**, with
+only ncnn, numpy and the headless build of opencv, as declared in
+`function/requirements.txt`, on the slim base image of Python 3.11.
 
-## Modelo
+## Model
 
-`yolo26n_ncnn_model/` — export do `yolo26n.pt` default do COCO para ncnn
-em `imgsz=640` (`quantize=16` opcional, ver "Preparar"):
+`yolo26n_ncnn_model/` — the export of the default checkpoint of COCO to
+ncnn with an image size of 640, with the optional quantization to sixteen
+bits described in "Prepare":
 
-| Arquivo | Tamanho | Papel |
+| File | Size | Role |
 |---|---|---|
-| `model.ncnn.bin` | 9.736.936 B (9,3 MiB) | pesos fp32 |
-| `model.ncnn.param` | 26.404 B | grafo |
-| `metadata.yaml` | 1.509 B | procedência do export (task, imgsz, 80 nomes) — **não é lido em runtime** |
-| `coco80.names` (na raiz do exemplo) | 621 B | os 80 nomes, em texto puro |
+| `model.ncnn.bin` | 9,736,936 bytes | the weights |
+| `model.ncnn.param` | 26,404 bytes | the graph |
+| `metadata.yaml` | 1,509 bytes | the provenance of the export, with the task, the image size and the eighty names; it is **not read at runtime** |
+| `coco80.names`, at the root of the example | 621 bytes | the eighty names, as plain text |
 
-`sha256`: `model.ncnn.bin` = `d4d6cf5b817d1aa7…d555`,
-`model.ncnn.param` = `1d224cb99489e996…6217`, `coco80.names` =
-`bd17f1ee35d5f3c8…730a`. São os arquivos deste commit; um export
-refeito gera bytes diferentes (o `metadata.yaml` inclui a data do
-exportador).
+The `metadata.yaml` stays in the image as a record of the export, for the
+same reason as in the edge license plate example, but the handler **does
+not** parse it: without a YAML parser in the runtime the eighty class names
+come from `coco80.names`, a plain text file with eighty lines generated
+from the checkpoint. The handler aborts with a clear message when the count
+does not match the one of the model.
 
-O `metadata.yaml` fica na imagem como registro do export (mesma razão do
-`alpr-ncnn`), mas o handler **não** o parseia: sem `pyyaml` no runtime,
-os 80 nomes de classe vêm de `coco80.names` (texto puro, 80 linhas,
-gerado do `.pt` — ver "Preparar"). O handler aborta com mensagem clara
-se a contagem não bater com a do modelo.
+The output of the exported graph comes out as **eighty-four rows by eight
+thousand four hundred columns**, with the center, the size and the scores
+of the eighty classes, in pixels of the resized image: the decoding, with
+the anchors, the strides and the sigmoid, is already at the end of the
+parameter file. The handler only replicates what comes **after** the forward
+pass.
 
-`out0` do grafo exportado sai como **(84, 8400) = [cx, cy, w, h, 80
-scores]** em px-640: o decode (anchors, strides, sigmoid) já está no
-fim do `model.ncnn.param` (`Concat cat_22` + `Sigmoid sigmoid_0`). O
-handler só replica o que vem **depois** do forward.
+## Why it exists
 
-## Por que existe
+Torch is dead weight in the ncnn path, since the ultralytics runtime
+imports it unconditionally even when the inference runs through ncnn.
+Without the two of them the edge image falls to **811 MB** instead of
+2.46 GB, the size of the amd64 counterpart with the CPU build of torch,
+and the import of the handler falls from 1.2 s to 0.13 s on this host. On
+ARM with an eMMC storage the difference is orders of magnitude greater.
 
-O torch é peso morto no caminho ncnn (o ultralytics o importa
-incondicionalmente mesmo quando a inferência é ncnn). Tirando os dois, a
-imagem de borda fica em **811 MB** em vez de 2,46 GB (o par amd64 +cpu) e
-o `import` do handler cai de 1,2 s para 0,13 s neste host — no ARM/eMMC
-a diferença é ordens de grandeza maior (o `alpr-ncnn-slim` mediu ~63 s →
-~10 s projetado na TVBox).
+The gain here is **not** the throughput: on this x86 host ncnn is about
+2.4 times slower than the torch runtime with its vectorized instructions,
+with 50 to 60 ms against 20 to 24 ms of wall time when warm. It is the size
+of the image, the cold start and the memory. For the throughput on ARM, the
+edge license plate example measured ncnn as 2.55 times faster than the CPU
+backend of torch on the same host; **for this model nothing has been
+measured on ARM yet**.
 
-O ganho aqui **não** é throughput: neste x86 o ncnn é ~2,4× mais lento que
-o torch+oneDNN (50-60 ms vs 20-24 ms de parede, warm). É tamanho de
-imagem, cold e RAM. Para throughput no ARM, o `alpr-ncnn` mediu ncnn
-2,55× mais rápido que torch CPU no mesmo box (MODELS.md §2) — **para
-este modelo ainda não medimos na TVBox**.
+## Parity with the counterpart
 
-## Paridade com o par .pt (medido 2026-09-28, x86)
+Same host, same inputs, with a confidence of 0.25, an image size of 640
+and the square letterbox, which is what the amd64 counterpart uses in
+order to match the static shape of this export:
 
-Mesmo host, mesmos inputs, `conf=0.25 imgsz=640 rect=False` (o par
-amd64 passa `rect=False` justamente para bater com o shape estático
-deste export — ver o README dele):
-
-| conjunto | imagens | detecções | mesma contagem | mesmas classes | max \|Δconf\| | max \|Δbox\| |
+| Set | Images | Detections | Same count | Same classes | Maximum difference of confidence | Maximum difference of box |
 |---|---|---|---|---|---|---|
-| fotos reais (picsum, 1280×720) | 20 | 40 | 20/20 | 20/20 | 0,0016 | 0,12 px |
-| regressão sintética (preto, ruído, 1×1, 4K, retrato, panorâmica, collage 2×2, PNG alpha, cinza, JPEG q5) | 15 | 26 | 15/15 | 15/15 | 0,0036 | 1,94 px (4K) |
-| contêiner arm64 (qemu) vs contêiner amd64, `bus.jpg` | 1 | 5 | 1/1 | 1/1 | 0,0048 | 2,09 px |
+| Real photographs, at 1280 by 720 | 20 | 40 | 20/20 | 20/20 | 0.0016 | 0.12 px |
+| Synthetic regression, with a black image, noise, a single pixel, 4K, a portrait, a panorama, a collage, an image with an alpha channel, a grayscale image and a JPEG with the lowest quality | 15 | 26 | 15/15 | 15/15 | 0.0036 | 1.94 px, on the 4K image |
+| The arm64 container against the amd64 container, over the same photograph | 1 | 5 | 1/1 | 1/1 | 0.0048 | 2.09 px |
 
-A última linha é a comparação entre as **imagens de verdade** (as duas
-publicadas, mesmo `bus.jpg`): mesmas 5 detecções, mesmas classes, mesma
-ordem, `bus` a 0,9030 (amd64) contra 0,9038 (arm64). O delta maior que o
-do x86 vem dos kernels aarch64 do ncnn (NEON, ordem de acumulação
-diferente) — a emulação qemu é exata em ponto flutuante, então o número
-é o aarch64 real, mesmo que o **tempo** medido por ela não signifique
-nada (ver "Latência medida").
+The last row compares the **real images**, the two published ones: the same
+five detections, the same classes and the same order, with the bus at 0.9030
+on amd64 against 0.9038 on arm64. The difference is larger than the one on
+x86 because of the aarch64 kernels of ncnn, which use the vector
+instructions of the processor and a different order of accumulation. The
+floating point behavior of the emulation is exact, so the number is the
+real aarch64 one, even though the **time** measured through it does not
+mean anything, as described in the section of the measured latency.
 
-A **imagem anotada sai byte-idêntica** em 15/20 fotos reais (mesma
-paleta, mesma espessura, mesmo JPEG — o helper `_annotate` é cópia
-literal entre os dois handlers, conferida com diff). Nos 5 restantes a
-diferença é a borda de uma caixa 1 px deslocada pelo arredondamento
-(delta ≤ 200 B no JPEG, e a diferença de pixel fica numa faixa de ~17 px
-de largura).
+The **annotated image comes out byte identical** in 15 of the 20 real
+photographs, with the same palette, the same thickness and the same JPEG,
+since the annotation helper is a literal copy between the two handlers. In
+the remaining five the difference is the border of a box displaced by one
+pixel by the rounding, with a delta of at most 200 bytes in the JPEG.
 
-O mesmo conjunto de entradas inválidas (JSON quebrado, chave faltando,
-base64 inválido, bytes que não são imagem, payload vazio) dá a mesma
-resposta de erro nos dois handlers.
+The same set of invalid inputs, with a broken JSON, a missing key, an
+invalid base64, bytes that are not an image and an empty payload, produces
+the same error answer in both handlers.
 
-## Contrato de I/O
+## Input and output contract
 
-Idêntico ao par amd64 — ver o contrato completo lá. Resumo:
-
-```
-entrada:  {"image_base64": "<jpg ou png em base64>"}
-saída:    {"status": "success", "image_base64": "<jpg anotado>",
-           "image_format": "jpeg", "image_size": {...},
-           "detections": [{"class": ..., "confidence": ..., "box": {...}}, ...],
-           "inference_ms": 42.0}
-       ou {"status": "error", "message": "..."}
-```
-
-## Contrato de Prontidão (ADR-0008, Emenda 2026-09-14, §3)
-
-`index.py` com bind-first + lazy-load **e warmup-at-boot** (`_warmup`:
-inferência dummy antes de `_ready.set()`, fail-open, `SKIP_WARMUP=1`
-desliga). Mesmos códigos: `GET /_/ready` 200/503, `POST /_/ready`
-sempre 404, `POST /` 503 até pronto, `GET` desconhecido 404.
-
-> Nota: durante a janela de readiness o log do contêiner mostra
-> `BrokenPipeError` traceado pelo `socketserver` quando o poll do
-> watchdog recebe o 503 e fecha a conexão. É cosmético e vem do
-> `index.py` compartilhado com o `alpr`/`alpr-ncnn-slim` (o watchdog
-> segue pollando e a instância fica pronta) — não é regressão deste
-> exemplo.
-
-## Estrutura
+Identical to the amd64 counterpart, whose complete contract is described
+there. In summary:
 
 ```
-function/handler.py       # pipeline ncnn+numpy, sem torch
+input:   {"image_base64": "<jpg or png in base64>"}
+output:  {"status": "success", "image_base64": "<annotated jpg>",
+          "image_format": "jpeg", "image_size": {...},
+          "detections": [{"class": ..., "confidence": ..., "box": {...}}, ...],
+          "inference_ms": 42.0}
+         or {"status": "error", "message": "..."}
+```
+
+## Readiness contract
+
+The `index.py` implements **bind first and lazy load**, the same pattern as
+the other examples, and it also warms up at boot: a dummy inference runs
+before the ready event is signaled, it fails open and the variable
+`SKIP_WARMUP=1` disables it. The status codes are the same: `GET /_/ready`
+answers with 200 or 503, `POST /_/ready` always answers with 404 and
+`POST /` answers with 503 until the instance is ready, while an unknown
+route answers with 404.
+
+During the readiness window the log of the container shows a broken pipe
+error, traced by the server of the standard library, when the poll of the
+watchdog receives the 503 and closes the connection. It is cosmetic and it
+comes from the HTTP process that is shared with the other examples: the
+watchdog keeps polling and the instance becomes ready.
+
+## Structure
+
+```
+function/handler.py       # the pipeline with ncnn and numpy, without torch
 function/requirements.txt # ncnn + numpy + opencv-headless
-index.py                  # mesmo contrato do alpr-ncnn, com warmup
-yolo26n_ncnn_model/       # trio do export ncnn (bin+param+metadata)
-coco80.names              # 80 nomes de classe (texto puro, do .pt)
-Dockerfile                # SOMENTE arm64
+index.py                  # the same contract as the edge example, with the warmup
+yolo26n_ncnn_model/       # the trio of the ncnn export, the weights, the parameters and the metadata
+coco80.names              # the eighty class names, as plain text
+Dockerfile                # arm64 only
 ```
 
-## Preparar
+## Prepare
 
 ```bash
-# a partir da raiz do repositório. O export congela o shape de entrada
-# (640×640), então o IMAGE_SIZE do handler/Dockerfile precisa coincidir
-# com o imgsz do export.
+# from the root of the repository. The export freezes the input shape at
+# 640 by 640, so the image size of the handler and of the Dockerfile has to
+# match the image size of the export.
 yolo export model=yolo26n.pt format=ncnn imgsz=640
-# ou, para metade do tamanho do .bin com penalidade pequena de
-# precisão (medida em x86: mesmas classes/contagens, max Δconf 0.0067,
-# max Δbox 0.8 px, 12/20 imagens byte-idênticas):
+# or, for half the size of the weights with a small penalty in the
+# accuracy, measured on x86 with the same classes and counts, a maximum
+# difference of confidence of 0.0067, a maximum difference of box of 0.8 px
+# and twelve of the twenty photographs byte identical:
 #   yolo export model=yolo26n.pt format=ncnn imgsz=640 quantize=16
 
 mkdir -p examples/yolo26n-coco-ncnn-slim/yolo26n_ncnn_model
@@ -138,8 +141,8 @@ cp yolo26n_ncnn_model/model.ncnn.bin \
    yolo26n_ncnn_model/metadata.yaml \
    examples/yolo26n-coco-ncnn-slim/yolo26n_ncnn_model/
 
-# os nomes de classe vêm do .pt, em texto puro (o handler não tem pyyaml
-# para ler o metadata.yaml):
+# the class names come from the checkpoint, as plain text, since the
+# handler has no YAML parser to read the metadata file:
 python3 -c "
 from ultralytics import YOLO
 names = YOLO('yolo26n.pt').names
@@ -148,45 +151,39 @@ open('examples/yolo26n-coco-ncnn-slim/coco80.names','w').write(
     ''.join(names[i] + '\n' for i in range(80)))
 "
 
-# compilar o watchdog-lite para a TVBox (arm64)
+# build the watchdog for the ARM host (arm64)
 GOOS=linux GOARCH=arm64 go build -o examples/yolo26n-coco-ncnn-slim/watchdog-lite ./cmd/watchdog-lite
 ```
 
-Se trocar de modelo, regere o `coco80.names` junto — o handler aborta
-com `modelo tem N classes, ... tem M` se a contagem não bater.
+If the model is replaced, the file with the names has to be regenerated
+together with it, since the handler aborts when the counts do not match.
 
-O `imgsz=640` do export é o que amarra os dois exemplos: o
-`model.ncnn.param` não grava a shape de entrada de forma declarativa
-(o `Input in0` é shape-less), mas o grafo é construído para 8400
-anchors (80²+40²+20²) e o `metadata.yaml` registra `imgsz: [640, 640]`.
-Os dois handlers passam `IMAGE_SIZE=640` e letterbox quadrado por causa
-disso — se o `.pt` usasse o retângulo mínimo do `yolo predict`
-(`rect=True`) e o ncnn o quadrado, os dois divergiriam no
-pré-processamento (Δconf de até 0,06, medido; ver o README do par
-amd64).
+The image size of 640 of the export is what binds the two examples
+together: the parameter file does not record the input shape in a
+declarative way, since the input of the graph has no shape, but the graph
+is built for 8400 anchors and the metadata file records the image size.
+Both handlers use an image size of 640 and the square letterbox because of
+that. If the checkpoint used the smallest rectangle of the prediction
+command and ncnn used the square one, the two would diverge in the
+pre-processing, with a difference of confidence of up to 0.06, which was
+measured and is described in the README of the amd64 counterpart.
 
-## Build e teste com Docker
+## Build and test with Docker
 
 ```bash
 cd examples/yolo26n-coco-ncnn-slim
 docker buildx build --platform linux/arm64 -t faas-continuum/yolo26n-coco-ncnn-slim:latest .
 ```
 
-Tamanho medido 2026-09-28 (build cross via qemu; `/home/app/python` com
-ncnn 11 MB + numpy 51 MB + opencv-headless 80 MB):
-
-| Item | Tamanho |
-|---|---|
-| Imagem final | **811 MB** (o `chown -R` duplica ~200 MB de camada) |
-| `/home/app/python` | 207 MB |
-| `yolo26n_ncnn_model/` | 9,3 MB |
-
-Compare com o par amd64 +cpu: 2,46 GB. É a mesma pegada de imagem do
-`alpr-ncnn` (~1 GB com ultralytics) espremida sem torch.
+The measured size of the image is 811 MB, and the home directory of the
+application holds 207 MB with ncnn at 11 MB, numpy at 51 MB and the
+headless build of opencv at 80 MB. The layer that changes the ownership of
+the home directory duplicates about 200 MB.
 
 ```bash
-# o processo roda como `app` (não-root): o bind mount do socket precisa
-# permitir escrita, senão "listen unix ...: bind: permission denied".
+# the process runs as the unprivileged user of the image, so the mounted
+# directory of the socket has to allow writing, otherwise the watchdog
+# dies with a permission denied when it binds the socket.
 rm -rf /tmp/yolo-arm-sockets && mkdir -p /tmp/yolo-arm-sockets && chmod 777 /tmp/yolo-arm-sockets
 docker run --rm -d --name yolo-arm \
   -v /tmp/yolo-arm-sockets:/run/faas-continuum-socket \
@@ -194,88 +191,93 @@ docker run --rm -d --name yolo-arm \
 
 python3 -c "
 import base64, json
-b64 = base64.b64encode(open('/caminho/para/uma/foto.jpg','rb').read()).decode()
+b64 = base64.b64encode(open('/path/to/a/photo.jpg','rb').read()).decode()
 print(json.dumps({'image_base64': b64}))
 " > /tmp/payload.json
 curl -s --unix-socket /tmp/yolo-arm-sockets/handle.sock http://localhost/ -d @/tmp/payload.json
 ```
 
-## Publicar (registry `igoricda`)
+## Publish
 
-Tags: `docker.io/igoricda/yolo26n-coco-ncnn-slim:latest`. Build
-**nativo na TVBox** de preferência (cross via qemu é lento); o contexto
-precisa do `watchdog-lite` arm64 (ver "Preparar").
+The published tag is
+`docker.io/igoricda/yolo26n-coco-ncnn-slim:latest`. The build should run
+**natively on the ARM host**, since a cross build through the emulation of
+another architecture is slow, and the context has to contain the arm64
+watchdog.
 
-## Registro no agente (timeout por função)
+## Registration on the node agent (timeout per function)
 
-O cold do slim é de segundos (sem torch), então o `ENV READY_TIMEOUT=60s`
-dá margem folgada e o `timeout_ms` pode ser bem mais apertado que no par
-amd64 — que ainda paga 30-60 s de import. Para uma TVBox (Cortex-A55),
-comece conservador em 60 s e recalibre na primeira medição:
+The cold start of the slim variant takes a few seconds, since there is no
+torch, so the `READY_TIMEOUT=60s` of the image leaves plenty of margin and
+the timeout can be much tighter than in the amd64 counterpart, which still
+pays 30 to 60 seconds of import. On an ARM host with Cortex-A55 cores,
+start conservatively at 60 seconds and recalibrate after the first
+measurement:
 
 ```bash
 curl -i -X POST "$BASE_AGENTE/function/yolo26n-coco-ncnn-slim" \
-  -H "Authorization: $ADMIN_NÓ" -H "Content-Type: application/json" -d '{
+  -H "Authorization: $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{
     "image_ref": "docker.io/igoricda/yolo26n-coco-ncnn-slim:latest",
     "min_instances": 1,
     "timeout_ms": 60000
   }'
-# 201 → {"function":{...},"invoke_token":"..."}  GUARDE o invoke_token!
+# 201 -> {"function":{...},"invoke_token":"..."}  KEEP THE INVOKE TOKEN!
 ```
 
-Invocação: mesmo envelope `{"input": {"image_base64": ...}}` do par
-amd64; o nó repassa só o `input` ao handler.
+The invocation uses the same envelope `{"input": {"image_base64": ...}}` as
+the amd64 counterpart, since the node forwards only the input to the
+handler.
 
-## Knobs (env)
+## Knobs
 
-Os mesmos do par amd64, mais dois deste lado:
+The same ones as the amd64 counterpart, plus two on this side:
 
-| Variável | Padrão | Efeito |
+| Variable | Default | Effect |
 |---|---|---|
-| `MODEL_PATH` | `/home/app/yolo26n_ncnn_model` | diretório do export ncnn |
-| `NAMES_PATH` | `/home/app/coco80.names` | nomes de classe (texto puro) |
-| `N_THREADS` | `0` | `0` = default do ncnn; `>0` fixa (MODELS.md §2 validou 4 no ARM) |
-| `CONFIDENCE_THRESHOLD` | `0.25` | DEFAULT_CFG `conf` |
-| `IOU_THRESHOLD` | `0.7` | DEFAULT_CFG `iou` (NMS) |
-| `MAX_DET` | `300` | DEFAULT_CFG `max_det` |
-| `IMAGE_SIZE` | `640` | tem de bater com o `imgsz` do export |
-| `ANNOTATE` | `1` | `0` devolve só as detecções |
-| `JPEG_QUALITY` | `85` | qualidade do jpg anotado |
-| `ANNOTATE_MAX_SIDE` | `0` | `>0` reduz a imagem anotada p/ caber no teto de 8 MiB |
+| `MODEL_PATH` | the directory of the export inside the image | the ncnn export |
+| `NAMES_PATH` | the file of the names inside the image | the class names, as plain text |
+| `N_THREADS` | `0` | zero leaves the default of ncnn and a positive value pins the count, with four validated on ARM |
+| `CONFIDENCE_THRESHOLD` | `0.25` | the confidence threshold |
+| `IOU_THRESHOLD` | `0.7` | the intersection over union used by the suppression |
+| `MAX_DET` | `300` | the maximum number of detections |
+| `IMAGE_SIZE` | `640` | it has to match the image size of the export |
+| `ANNOTATE` | `1` | with zero the answer carries only the detections |
+| `JPEG_QUALITY` | `85` | the quality of the annotated image |
+| `ANNOTATE_MAX_SIDE` | `0` | with a positive value the annotated image is reduced to fit the ceiling of eight mebibytes |
 
-## Latência medida
+## Measured latency
 
-- **x86 (execução local do handler ncnn):** warm 50-60 ms de parede,
-  `inference_ms` 42-52 (mediana de 5, `bus.jpg` com 5 detecções).
-  `import` do handler 0,13 s.
-- **contêiner arm64 sob qemu (funcional, NÃO é número de ARM):** a
-  invocação responde HTTP 200 com as 5 detecções corretas; o
-  `inference_ms` de 14,6 s é quase todo overhead de emulação (o binário
-  aarch64 roda instrução-por-instrução). Sirve para provar que a imagem
-  sobe e responde, não para dimensionar a TVBox.
-- **ARM (TVBox):** **não medido para este modelo ainda.** O `alpr-ncnn`
-  (mesmo backend, YOLO26-OBB 640) mediu ~270 ms/invocação quente na
-  TVBox como referência de ordem de grandeza; o `yolo26n` COCO tem 80
-  classes em vez de 1, então o NMS custa um pouco mais, com a mesma rede
-  nano.
+- **x86, with the ncnn handler running locally:** 50 to 60 ms of wall time
+  when warm, with an inference of 42 to 52 ms, the median of five runs over
+  a photograph with five detections, and an import of the handler of 0.13 s.
+- **The arm64 container under the emulation, which is functional but is
+  not a number of ARM:** the invocation answers with a status of 200 and the
+  five correct detections. The inference of 14.6 s is almost entirely the
+  overhead of the emulation, since the aarch64 binary runs instruction by
+  instruction. It serves to prove that the image starts and answers, not to
+  dimension the ARM host.
+- **ARM: nothing has been measured for this model yet.** The edge license
+  plate example, with the same backend and an image size of 640, measured
+  about 270 ms per warm invocation on an ARM host as an order of magnitude
+  reference; this model has eighty classes instead of one, so the
+  suppression costs a little more, with the same size of the network.
 
-## O que foi verificado (2026-09-28)
+## What was verified
 
-| Verificação | Resultado |
+| Check | Result |
 |---|---|
-| `py_compile` no handler + `index.py` | OK |
-| Contêiner arm64 (qemu) ponta a ponta: `GET /_/ready` 200, `POST /_/ready` 404, `POST /` 200 | 5 detecções, mesmas classes do contêiner amd64 |
-| Paridade vs par `.pt` (20 fotos reais + 15 sintéticas + contêiner arm64) | mesma contagem e classes em 36/36; tabela acima |
-| `ANNOTATE=0` | resposta de 587 B (pt) / 584 B (slim) sem `image_base64` |
-| Build da imagem | 811 MB, `/home/app/python` 207 MB |
+| The compilation of the handler and of the HTTP process | OK |
+| The arm64 container end to end, under the emulation | `GET /_/ready` with 200, `POST /_/ready` with 404 and `POST /` with 200, with five detections and the same classes as the amd64 container |
+| The parity against the counterpart, over 20 real photographs, 15 synthetic ones and the arm64 container | the same count and the same classes in 36 of 36 |
+| The annotation switch | an answer of 587 bytes with the checkpoint and 584 bytes with the slim variant, without the encoded image |
+| The build of the image | 811 MB, with 207 MB in the home directory of the application |
 
-O `ncnn` do requirements puxa `opencv-python` (não-headless) + tqdm +
-requests + portalocker como dependências declaradas; o handler usa só
-`ncnn.Net`/`ncnn.Mat` do módulo compilado, então os dois módulos extras
-(`ncnn/model`, `ncnn/utils`) nunca são importados. Eles ficam na imagem
-por compatibilidade com o `alpr-ncnn-slim` — uma otimização
-possível é trocar `opencv-python-headless` por um `pip install --no-deps`
-do ncnn, o que cortaria ~64 MB de `opencv_python.libs` (Qt5/ffmpeg) e a
-dependência de `libgl1`; **não foi aplicado aqui** para não divergir do
-requirements do `alpr-ncnn-slim` (validado na TVBox) sem medir de novo
-no box.
+The `ncnn` package of the requirements pulls the full build of opencv, which
+is not the headless one, together with a few other packages, as declared
+dependencies. The handler only uses the network and the matrix types of the
+compiled module, so the two extra modules are never imported. They stay in
+the image for compatibility with the slim edge license plate example. A
+possible optimization is to install ncnn without its dependencies, which
+would cut about 64 MB of the libraries of the graphical stack and the
+dependency on the OpenGL library; it was **not applied here** so that the
+requirements do not diverge from the ones of the validated example.

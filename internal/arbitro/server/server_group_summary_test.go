@@ -86,7 +86,7 @@ func TestHistorySummaryGroupsByResolvedGroup(t *testing.T) {
 	if entry.Count != 2 {
 		t.Fatalf("summary[%q].count=%d, want 2 (variantes somadas)", groupKey, entry.Count)
 	}
-	// Nenhuma chave por variante isolada.
+	// There is no key per isolated variant.
 	for k := range summary {
 		fn, _, _ := strings.Cut(k, "\x00")
 		if fn == "alpr-yolo-tiny" || fn == "alpr-yolo-full" {

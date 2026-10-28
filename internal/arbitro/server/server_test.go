@@ -226,7 +226,7 @@ func TestServer_AlemMaxNodes503(t *testing.T) {
 			t.Fatalf("Upsert %s: %v", id, err)
 		}
 	}
-	// node_id NOVO deve falhar 503
+	// A new node id must fail with 503
 	body := map[string]any{"node_id": "overflow", "layer": "borda", "host": "10.0.0.99:8080"}
 	rr := doReq(t, h, "POST", "/nodes", body, token)
 	if rr.Code != http.StatusServiceUnavailable {
@@ -384,11 +384,11 @@ func TestServer_TelemetriaCorreta204EGetMostra(t *testing.T) {
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("telemetry status=%d want 204 body=%s", rr.Code, rr.Body.String())
 	}
-	// Monitor deve ter
+	// The monitor must have it
 	if latest, ok := mon.Latest("n1"); !ok || latest.CPUUsagePct != 42.5 {
 		t.Fatalf("mon Latest not found or mismatch: ok=%v pkg=%+v", ok, latest)
 	}
-	// GET deve mostrar latest_telemetry e status ativo
+	// The GET must show latest_telemetry and the active status
 	rr = doReq(t, h, "GET", "/nodes", nil, token)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("GET: %d", rr.Code)
@@ -429,7 +429,7 @@ func TestServer_DeleteNode(t *testing.T) {
 	srv, token, _, _ := newTestServerEnv(t)
 	h := srv.Handler()
 
-	// 404 antes de existir
+	// 404 before it exists
 	rr := doReq(t, h, "DELETE", "/nodes/n1", nil, token)
 	if rr.Code != http.StatusNotFound {
 		t.Fatalf("delete inexistente status=%d want 404", rr.Code)
@@ -543,7 +543,7 @@ func TestServer_InvokeRateLimit429(t *testing.T) {
 			t.Fatalf("req %d status=%d want 200", i, rr.Code)
 		}
 	}
-	// 61ª deve ser 429
+	// The 61st must be 429
 	req := httptest.NewRequest("POST", "/invoke", strings.NewReader(`{"function":"x","input":{}}`))
 	req.RemoteAddr = "10.0.0.1:1234"
 	rr := httptest.NewRecorder()

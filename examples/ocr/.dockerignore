@@ -1,6 +1,7 @@
-# Contexto mínimo do build: código + requirements + modelo + configs.
-# (Os dois binários watchdog-lite-amd64/arm64 precisam continuar no
-# contexto: o Dockerfile escolhe um deles via TARGETARCH.)
+# Minimal build context: the code, the requirements, the model and the
+# configurations.
+# (The two watchdog binaries, amd64 and arm64, have to stay in the
+# context, since the Dockerfile picks one of them with TARGETARCH.)
 __pycache__/
 *.pyc
 *.pyo

@@ -145,7 +145,7 @@ func TestExpectedCostSeed(t *testing.T) {
 		seedCostEntry(t, h, fn, "donor-b", "borda", Bucket0_10, 20, now)
 		seedCostEntry(t, h, fn, "donor-b", "borda", Bucket0_10, 40, now)
 		seedCostEntry(t, h, fn, "donor-n", "nevoa", Bucket0_10, 1000, now)
-		// Thin SEM nenhuma entry: sem sonda => poola todas as camadas.
+		// Thin, with no entry at all: without a probe it pools every layer.
 
 		cost, n, ok, seeded := h.ExpectedCost(fn, "ghost", window, now)
 		want := (20.0 + 40.0 + 1000.0) / 3.0

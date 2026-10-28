@@ -314,7 +314,7 @@ func TestRace_NoGaugeLeakNoGoroutineLeak(t *testing.T) {
 	logPath := t.TempDir() + "/inv.jsonl"
 	gw, ig := observeTestGateway(t, ns, logPath, fixedQueueSelector{[]nodes.Node{nA, nB}}, true)
 
-	// Aquecimento + assentamento total antes da baseline.
+	// The warmup and the full settling before the baseline.
 	invokeRecorder(t, gw, `{"function":"fn","slo":{"max_latency_ms":400},"input":{"a":1}}`)
 	waitForGaugeZero(t, ig, "fn", []string{"nA", "nB"}, 10*time.Second)
 	base := runtime.NumGoroutine()

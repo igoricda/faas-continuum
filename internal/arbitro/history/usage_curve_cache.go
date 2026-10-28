@@ -1,5 +1,5 @@
-// Pooled no-PSI usage-curve estimator with bounded gen-guarded cache
-// (selflearning-telemetry-seeded-history, no-PSI usage-curve fallback).
+// Pooled no-PSI usage-curve estimator with a bounded generation-guarded
+// cache.
 //
 // This file is the STATEFUL shell around the pure estimator in
 // usage_curve.go (FitUsageCurve, PosteriorUsageCurve, ShrinkUsageToPrior,

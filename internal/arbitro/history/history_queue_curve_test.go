@@ -60,9 +60,9 @@ func TestQueueCurveBuckets(t *testing.T) {
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 6, 900, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeTimeout, 20, 0, false)
 	seedQueueEntry(t, h, group, node, now, OutcomeRejeicaoCapacidade, 21, 0, false)
-	// Faixa 41+: 1 sucesso.
+	// The range above 41: one success.
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 41, 1000, false)
-	// Fora da curva: Inflight desconhecido.
+	// Outside the curve: an unknown number of requests in flight.
 	seedQueueEntry(t, h, group, node, now, OutcomeSucesso, 0, 777, false)
 
 	curve, ok := h.QueueCurve(group, node, time.Hour, now)

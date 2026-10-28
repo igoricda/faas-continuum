@@ -1,9 +1,9 @@
 package server
 
-// Regression group of the gateway and the server from the audit: the dedicated
-// limiter of the late report, the injectable clock in the server and the
-// application of the status, of the deduplication and of the rejection without a
-// gateway in the late report.
+// Regression group of the gateway and of the server: the dedicated limiter of
+// the late report, the injectable clock in the server and the application of
+// the status, of the deduplication and of the rejection without a gateway in
+// the late report.
 
 import (
 	"net/http"

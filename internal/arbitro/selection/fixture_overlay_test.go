@@ -1,12 +1,10 @@
 package selection
 
-// Helpers of the audit harness: a pinned fixture plus a deterministic overlay of
-// synthetic usage, which covers a device without pressure data, where the
-// pressure is forced to unknown. They were extracted from the previous cycle
-// when the previous selector was retired, since the harness audited the
-// predictive band of the Bayesian regression on the usage curve, which the
-// history package now exercises on its own, and the fixture and the overlay stay
-// here so the calibration audit remains reproducible.
+// Helpers of the calibration harness: a pinned fixture plus a deterministic
+// overlay of synthetic usage, which covers a device without pressure data,
+// where the pressure is forced to unknown. The fixture and the overlay live
+// here so that the calibration of the predictive band of the Bayesian
+// regression on the usage curve stays reproducible.
 //
 // The fixture is loaded through the production types, without a parallel schema,
 // and only the primary keys are appended again, since the fan-out of the grouped
@@ -33,7 +31,7 @@ const (
 	rgFixtureSegs  = 12
 )
 
-// rgUsageSrc rotula o overlay do Track C em cada linha de segmento.
+// rgUsageSrc labels the overlay on every segment line.
 const rgUsageSrc = "usage-overlay(hash,fnv-key-idx,psi=0)"
 
 // rgUsageSample is a warm solo point of the overlay, with its synthetic usage

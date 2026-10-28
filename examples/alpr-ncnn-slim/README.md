@@ -1,58 +1,62 @@
-# Exemplo: função ALPR borda slim (ncnn direto, sem torch)
+# Example: slim edge license plate detection function (direct ncnn, without torch)
 
-Par slim de [`alpr-ncnn`](../alpr-ncnn) contra o contrato da ADR-0008
-(`docs/ADR-0008-contrato-execucao-funcao.md`): mesma entrada, mesma
-saída, mesmo modelo (`best_ncnn_model/`, exportado em `imgsz=640`) —
-mas **sem torch/ultralytics**: só `ncnn` + `numpy` + `opencv-headless`
-(`function/requirements.txt`).
+The slim counterpart of the [edge example](../alpr-ncnn): the same input,
+the same output and the same model, the directory `best_ncnn_model`
+exported with an image size of 640, but **without torch and without
+ultralytics**, with only ncnn, numpy and the headless build of opencv, as
+declared in `function/requirements.txt`.
 
-## Por que existe
+## Why it exists
 
-Na TVBox (Cortex-A55 + eMMC), o `alpr-ncnn` paga ~63 s de cold: ~31 s
-de import do stack torch/ultralytics + ~32 s de page-in no primeiro
-forward — o torch é peso morto (a inferência roda em ncnn, mas o
-ultralytics o importa incondicionalmente). O export ncnn já traz o
-decode embutido no grafo (anchors/strides/sigmoid/cos-sin na cauda do
-`model.ncnn.param`), então o handler replica em numpy: letterbox
-(com o arredondamento ±0.1) → ncnn `in0`/`out0` → filtro de confiança
-→ fast-NMS com IoU probabilístico → scale-back. Cold projetado na casa
-dos ~10 s (**a confirmar na primeira medição no box**).
+On an ARM board with an eMMC storage the edge example pays about 63 seconds
+of cold start: about 31 seconds to import the stack of torch and of the
+ultralytics runtime and about 32 seconds of page-in on the first forward.
+Torch is dead weight there, since the inference runs through ncnn while the
+ultralytics runtime imports torch unconditionally. The ncnn export already
+carries the decoding inside the graph, with the anchors, the strides, the
+sigmoid and the cosine and sine in the tail of the parameter file, so the
+handler replicates the path with numpy: the letterbox, with the rounding of
+the borders by one tenth, the inference, the confidence filter, the fast
+suppression with the probabilistic intersection over union and the rescaling
+back to the original coordinates. The projected cold start falls to about
+ten seconds.
 
-## Paridade (validada em x86, 2026-09-23)
+## Parity
 
-Handler slim vs handler ultralytics, mesmos pesos, mesmas imagens:
-**diff 0** em classe, confiança e nos 5 campos do OBB (`x,y,w,h,
-rotation_rad`) — em 3 imagens reais de teste (1 detecção cada), 5
-sintéticas (0 detecções, cobre letterbox wide/tall/padded) e 1 collage
-2×2 (4 detecções via NMS probiou). Warm equivalente em x86 (86 ms vs
-103 ms — NMS numpy ~20 ms mais lento, irrelevante ante os ~300 ms do
-warm no ARM). Import 5,8× mais rápido mesmo com page cache quente
-(0,32 s vs 1,85 s); venv 348 MB vs 1,6 GB. (Absolutos x86 medidos com
-o host em economia de energia, ~2,6 GHz sem turbo — inflados cerca de
-1,5–2× contra performance plena; as razões e a paridade, medidas sob
-as mesmas condições, valem.)
+The slim handler and the handler built on the ultralytics runtime, with the
+same weights and the same images, produce **no difference** in the class,
+in the confidence and in the five fields of the oriented box, over three
+real test images, five synthetic images that cover the wide, the tall and
+the padded letterbox and one collage with four detections kept by the
+suppression. The warm path is equivalent on x86, with 86 ms against 103 ms,
+since the suppression in numpy is about twenty milliseconds slower, which is
+irrelevant next to the about 300 ms of the warm path on ARM. The import is
+5.8 times faster even with a warm page cache, and the environment is 348 MB
+against 1.6 GB.
 
-## Contrato de Prontidão (igual ao alpr-ncnn)
+## Readiness contract
 
-`index.py` com bind-first + lazy-load **e warmup-at-boot** (`_warmup`:
-inferência dummy antes de `_ready.set()`, fail-open, `SKIP_WARMUP=1`
-desliga). Mesmos códigos: `GET /_/ready` 200/503, `POST /_/ready`
-sempre 404, `POST /` 503 até pronto.
+The `index.py` implements **bind first and lazy load**, the same pattern as
+the other examples, and it also warms up at boot: a dummy inference runs
+before the ready event is signaled, it fails open and the variable
+`SKIP_WARMUP=1` disables it. The status codes are the same: `GET /_/ready`
+answers with 200 or 503, `POST /_/ready` always answers with 404 and
+`POST /` answers with 503 until the instance is ready.
 
-## Estrutura
+## Structure
 
 ```
-function/handler.py       # pipeline ncnn+numpy, sem torch
+function/handler.py       # the pipeline with ncnn and numpy, without torch
 function/requirements.txt # ncnn + numpy + opencv-headless
-index.py                  # mesmo contrato do alpr-ncnn, com warmup
-best_ncnn_model/         # cópia do trio do alpr-ncnn (bin+param+metadata)
-Dockerfile                # SOMENTE arm64
+index.py                  # the same contract as the edge example, with the warmup
+best_ncnn_model/          # the copy of the trio of the edge example, the weights, the parameters and the metadata
+Dockerfile                # arm64 only
 ```
 
-## Build e publicação (registry `igoricda`)
+## Build and publish
 
 ```bash
-# a partir da raiz do repositório:
+# from the root of the repository:
 GOOS=linux GOARCH=arm64 go build -o examples/alpr-ncnn-slim/watchdog-lite ./cmd/watchdog-lite
 cp examples/alpr-ncnn/best_ncnn_model/* examples/alpr-ncnn-slim/best_ncnn_model/
 docker buildx build --platform linux/arm64 \
@@ -60,23 +64,26 @@ docker buildx build --platform linux/arm64 \
   -f examples/alpr-ncnn-slim/Dockerfile examples/alpr-ncnn-slim --push
 ```
 
-Build **nativo na TVBox** de preferência (cross via qemu é lento).
+The build should run **natively on the ARM host**, since a cross build
+through the emulation of another architecture is slow.
 
-## Registro no agente
+## Registration on the node agent
 
-Cold projetado ~10 s ⇒ teto próprio de 60 s (margem ~6×;
-`READY_TIMEOUT=60s` na imagem; **recalibrar após a primeira medição**):
+With a projected cold start of about ten seconds, a ceiling of its own of 60
+seconds leaves a margin of about six times, and the image carries a
+`READY_TIMEOUT=60s`. It has to be recalibrated after the first measurement:
 
 ```bash
 curl -i -X POST "$BASE_AGENTE/function/alpr-ncnn-slim" \
-  -H "Authorization: $ADMIN_NÓ" -H "Content-Type: application/json" -d '{
+  -H "Authorization: $ADMIN_TOKEN" -H "Content-Type: application/json" -d '{
     "image_ref": "docker.io/igoricda/alpr-ncnn-slim:latest",
     "min_instances": 0,
     "timeout_ms": 60000
   }'
 ```
 
-Invocação: mesmo envelope `{"input": {"image_base64": ...}}` do
-alpr-ncnn. Knobs extras: `IOU_THRESHOLD=0.7`, `MAX_DET=300` (padrões do
-ultralytics; `CONFIDENCE_THRESHOLD=0.25`, `IMAGE_SIZE=640` como no
-original).
+The invocation uses the same envelope `{"input": {"image_base64": ...}}` as
+the edge example. The extra knobs are `IOU_THRESHOLD=0.7` and `MAX_DET=300`,
+which are the defaults of the ultralytics runtime, while
+`CONFIDENCE_THRESHOLD=0.25` and `IMAGE_SIZE=640` are the same as in the
+original.

@@ -233,7 +233,7 @@ func TestSelectRiskKeepsUnmarkedVariant(t *testing.T) {
 		t.Fatalf("risk/D39: variante sem marca mantém o nó, got=%v", got)
 	}
 
-	// Marca nas DUAS variantes => cai.
+	// A mark on both variants drops the node.
 	mon.MarkExhausted("nevoa", "alpr-gpu", now)
 	got = exhaustedIDs(sel.Select(cands, "lpr", nil))
 	if slices.Contains(got, "nevoa") {

@@ -1,13 +1,13 @@
 package server
 
-// function-category-routing, todo 8: audit gap-fill tests.
+// Tests of the routing by function category.
 //
-// Todo 2 already wires FunctionCategories into listEntry (omitempty) and
-// todo 6 already keys history + summary by resolved group with the
-// coexistence comment on historySummaryForNode. What was missing was a
-// single GET asserting BOTH surfaces together in one entry, plus explicit
-// hist-set-but-window<=0 / hist-nil-but-window>0 panic-free coverage
-// (the F21 table only covers hist==nil&&window==0).
+// FunctionCategories is already wired into listEntry, which omits the empty
+// map, and the history and the summary are already keyed by the resolved
+// group, with the coexistence note on historySummaryForNode. What was
+// missing is a single GET that asserts both surfaces together in one entry,
+// plus explicit coverage of the history set with a non-positive window and of
+// a nil history with a positive window, both without a panic.
 
 import (
 	"encoding/json"

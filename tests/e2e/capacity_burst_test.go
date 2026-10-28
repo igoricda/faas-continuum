@@ -125,7 +125,7 @@ func (s *simNode) handler() http.Handler {
 	})
 }
 
-// burstResult carrega o desfecho de um invoke via Gateway.
+// burstResult holds the outcome of one invocation through the gateway.
 type burstResult struct {
 	status int
 	code   string
@@ -352,7 +352,7 @@ func TestE2E_CapacityBurstWithAlternative(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bloqueador não adquiriu o slot de B em 5s")
 	}
-	baseB := nodeB.hits.Load() // hit do bloqueador — fora da contagem da rajada
+	baseB := nodeB.hits.Load() // the blocker hit, outside the burst count
 
 	results := runBurst(t, gw, burstN, burstConc, burstSleepMS)
 
@@ -507,7 +507,7 @@ func TestE2E_CapacityBurstSingleSaturatedNode(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bloqueador não adquiriu o slot de C em 5s")
 	}
-	baseC := nodeC.hits.Load() // hit do bloqueador — fora da contagem da rajada
+	baseC := nodeC.hits.Load() // the blocker hit, outside the burst count
 
 	results := runBurst(t, gw, burstN, burstConc, burstSleepMS)
 

@@ -186,8 +186,9 @@ func TestPSICurvePredictFormula(t *testing.T) {
 	}
 }
 
-// Seam for todo 5: fit over Entries via an explicit PSI accessor, so no PSI
-// fields on Entry are needed yet. The accessor is the only PSI source.
+// Seam for the entry accessor: the fit runs over the Entries through an
+// explicit PSI accessor, so no PSI field of the Entry is needed. The accessor
+// is the only PSI source.
 func TestPSICurveEntrySeam(t *testing.T) {
 	psi := map[string][2]float64{
 		"a": {1, 2}, "b": {2, 1}, "c": {3, 4}, "d": {4, 3},

@@ -1,9 +1,10 @@
-// No-PSI usage curve estimator — pooled solo-only fit with shrinkage to a
-// layer prior (selflearning-telemetry-seeded-history, no-PSI fallback).
+// No-PSI usage curve estimator, a pooled solo-only fit with shrinkage to a
+// layer prior.
 //
-// TVBox fleet has no CONFIG_PSI, so the PSI fields on Entry are always 0
-// there and PSICurveFor never fires. This file is the usage-continuous
-// fallback: it trains on observed CPU/mem instead of PSI pressure.
+// Some deployments expose no PSI at all, so the PSI fields of the Entry are
+// always zero there and PSICurveFor never fires. This file is the
+// usage-continuous fallback: it trains on the observed CPU and memory load
+// instead of the PSI pressure.
 //
 // Model (closed form, O(1) predict — NO GP/Bayes on the hot path):
 //

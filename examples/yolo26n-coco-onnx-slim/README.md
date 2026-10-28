@@ -1,27 +1,31 @@
-# YOLO26n COCO na névoa — backend ONNX Runtime (faas-continuum, amd64)
+# YOLO26n COCO in the fog, with the ONNX Runtime backend
 
-Função de detecção geral YOLO26n (80 classes COCO) para o nó **névoa**
-(x86/amd64, ex. `ccsc-lscdesktop6`), seguindo o contrato de execução da
-ADR-0008 como os demais exemplos: `watchdog-lite` é o PID 1, sobe o
-`FPROCESS` e faz proxy reverso HTTP das invocações que chegam pelo socket
-Unix montado pelo agente.
+The generic detection function of the YOLO26n model, with the eighty
+classes of COCO, for an **x86** host, following the same execution contract
+as the other examples: the watchdog is the process with identifier one, it
+starts the function process and it proxies in reverse the invocations that
+arrive through the Unix socket mounted by the node agent.
 
-É o terceiro membro da família YOLO26n:
+It is the third member of the family of the YOLO26n examples:
 
-| Exemplo | Backend | Nó-alvo | Cold observado |
-|---|---|---|---|
-| `examples/yolo26n-coco` | torch CPU + ultralytics | servidor x86 | ~20–30 s |
-| `examples/yolo26n-coco-ncnn-slim` | ncnn | borda ARM (TVBox) | ~1–2 s |
-| **este** | onnxruntime | névoa x86 (.94) | **~0,8–1,5 s** |
+| Example | Backend | Target host |
+|---|---|---|
+| `examples/yolo26n-coco` | torch with the CPU build and the ultralytics runtime | an x86 server |
+| `examples/yolo26n-coco-ncnn-slim` | ncnn | an ARM edge host |
+| `examples/yolo26n-coco-onnx-slim` | the ONNX runtime | an x86 host |
 
-O handler/pós-processamento é o **mesmo** de `azure_functions/yolo26n-coco`
-(port 1:1 do par ncnn-slim; paridade com torch/ncnn já validada lá — mesmo
-N/classe/rank, conf ±0,002, OBB ±1 px). O que muda aqui é só o envelope de
-execução local: `index.py` (loopback do watchdog-lite, com `/_/ready` e
-`_unwrap`) no lugar do shim do ACA, e a imagem com `watchdog-lite` embutido
-sem o host do Azure Functions.
+The handler and its post-processing are a one to one port of the slim ncnn
+example, whose parity with the other backends was already validated there,
+with the same number of detections, the same classes and the same ranking,
+a confidence within two thousandths and an oriented box within one pixel.
+What changes here is only the envelope of the local execution: the HTTP
+process with the loopback of the watchdog, with the readiness route and the
+unwrapping of the envelope, instead of the shim of the serverless host, and
+the image with the watchdog built in.
 
-## Build (a partir da raiz do repositório)
+## Build
+
+From the root of the repository:
 
 ```sh
 GOOS=linux GOARCH=amd64 go build -o examples/yolo26n-coco-onnx-slim/watchdog-lite ./cmd/watchdog-lite
@@ -30,22 +34,25 @@ docker buildx build --platform linux/amd64 \
   -f examples/yolo26n-coco-onnx-slim/Dockerfile examples/yolo26n-coco-onnx-slim
 ```
 
-O binário `watchdog-lite` é compilado FORA do Docker para a arquitetura do
-nó (ADR-0001) — ele é gitignored (`/examples/*/watchdog-lite`), então cada
-checkout precisa gerar o seu.
+The watchdog binary is built outside the image, for the architecture of the
+target host, and it is ignored by Git with the pattern
+`/examples/*/watchdog-lite`, so every checkout has to build its own.
 
-## Contrato (ADR-0008)
+## Contract
 
-- `FPROCESS="python3 index.py"`, `UPSTREAM_PORT=8081`,
-  `SOCKET_PATH=/run/faas-continuum-socket/handle.sock`, `READY_TIMEOUT=60s`.
-- `GET /_/ready` responde 503 até o `handler` (sessão ORT) carregar e o
-  warmup dummy rodar; 200 depois. O socket Unix só abre após o 200.
-- O agente posta o input **cru** em `POST /` (`invoke_instance.go`);
-  `{"input": ...}` também é aceito (desembrulhado no `index.py`).
-- Saída: JSON de `handle()` (`{"status":"success", ...}` ou
-  `{"status":"error", ...}`), teto de 8 MiB do nó.
+- The function process is started with `python3 index.py`, the upstream
+  port is 8081, the socket is `/run/faas-continuum-socket/handle.sock` and
+  the readiness timeout is 60 seconds.
+- `GET /_/ready` answers with 503 until the handler, which is the session of
+  the runtime, is loaded and the dummy warmup has run, and with 200
+  afterwards. The Unix socket only opens after the 200.
+- The node posts the **raw** input on `POST /`, and the envelope
+  `{"input": ...}` is also accepted and unwrapped by the HTTP process.
+- The output is the JSON produced by the handler, either
+  `{"status":"success", ...}` or `{"status":"error", ...}`, with the ceiling
+  of eight mebibytes of the node.
 
-## Smoke local (sem agente)
+## Local smoke test, without the node agent
 
 ```sh
 mkdir -p /tmp/sock && chmod 777 /tmp/sock
@@ -60,17 +67,20 @@ class U(http.client.HTTPConnection):
 c = U("x"); c.request("GET", "/_/ready"); print(c.getresponse().status)'
 ```
 
-Saída esperada no cold (log do watchdog-lite): `fprocess pronto em
-127.0.0.1:8081` em menos de ~2 s, seguido de `index.py: warmup OK`.
+The expected answer during the cold start, in the log of the watchdog, is
+that the function process is ready on the loopback interface, followed by
+the confirmation of the warmup.
 
-## Deploy no nó
+## Deployment on the node
 
-O nó resolve a imagem por referência OCI no provisionamento
-(`containerruntime.PullImage`). Para trocar a imagem da função sem re-registrar:
+The node resolves the image by its OCI reference during the provisioning.
+To change the image of the function without registering it again:
 
-1. Editar `image_ref` no registry local (`/var/lib/faas-continuum/functions.json`,
-   mantendo `timeout_ms`/`idle_timeout`/`min_instances`/`max_instances`) — ou
-   `PUT /function/yolo26n-coco` na API de gestão do agente;
-2. `ctr -n faas-continuum images pull docker.io/igoricda/yolo26n-coco-onnx-slim:latest`
-   (pre-pull opcional, evita pagar o pull no primeiro provisionamento);
-3. reiniciar o agente (`systemctl restart faas-agente`) para reler o registry.
+1. Edit the image reference in the local registry, under
+   `/var/lib/faas-continuum/functions.json`, and keep the timeout, the idle
+   timeout and the minimum and maximum number of instances, or use the
+   `PUT /function/yolo26n-coco` route of the management API of the agent.
+2. Optionally pull the image ahead of time with
+   `ctr -n faas-continuum images pull docker.io/igoricda/yolo26n-coco-onnx-slim:latest`,
+   which avoids paying the pull on the first provisioning.
+3. Restart the agent so that it reads the registry again.

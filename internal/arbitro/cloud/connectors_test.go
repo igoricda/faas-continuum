@@ -129,7 +129,7 @@ func TestCloudStore_PerFunctionRoundTrip(t *testing.T) {
 		}
 	}
 
-	// Reabrir carrega o formato novo (load valida igual ao Set).
+	// Reopening loads the new format, and the load validates it like the set.
 	s2, err := NewCloudStore(path)
 	if err != nil {
 		t.Fatalf("reabrir: %v", err)

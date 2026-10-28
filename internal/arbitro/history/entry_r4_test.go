@@ -1,9 +1,10 @@
 package history
 
-// Cobertura focada da quebra autorizada r4 (selflearning-telemetry-seeded-history,
-// todo 5): Entry carrega PSICpuSomeAvg10/PSIMemFullAvg10 (float64, omitempty),
-// o arquivo carrega a sentinela historySchemaSentinelKey, e NewHistory rejeita
-// r3 sem marcador com erro fail-closed que nomeia o migrador (todo 6).
+// Focused coverage of the r4 format: the Entry carries
+// PSICpuSomeAvg10 and PSIMemFullAvg10, both float64 and omitted when empty,
+// the file carries the historySchemaSentinelKey sentinel, and NewHistory
+// rejects an r3 file without the marker with a fail-closed error that names
+// the migrator.
 
 import (
 	"encoding/json"
@@ -41,7 +42,7 @@ func TestEntryR4(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// O arquivo em disco carrega o marcador r4.
+		// The file on disk carries the r4 marker.
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
